@@ -1,51 +1,32 @@
 import AppKit
+import Observation
 import SwiftUI
 
 @MainActor
-final class MenuBarPanelController: NSObject, NSPopoverDelegate {
+final class MenuBarPanelController: NSObject {
     private let popover = NSPopover()
     private let hostingController = NSHostingController(rootView: AnyView(EmptyView()))
     private var statusItem: NSStatusItem?
     private weak var session: TranslationSessionStore?
-    private var lastWasActive = false
-    private let appearanceChangedNotification = Notification.Name("AppleInterfaceThemeChangedNotification")
+    private var isObservingSession = false
 
     override init() {
         super.init()
         popover.animates = true
         popover.behavior = .transient
         popover.contentSize = NSSize(width: 360, height: 430)
+        hostingController.sizingOptions = .preferredContentSize
         popover.contentViewController = hostingController
-        popover.delegate = self
-        DistributedNotificationCenter.default().addObserver(
-            self,
-            selector: #selector(systemAppearanceDidChange(_:)),
-            name: appearanceChangedNotification,
-            object: nil
-        )
-    }
-
-    deinit {
-        DistributedNotificationCenter.default().removeObserver(self)
     }
 
     func install(session: TranslationSessionStore) {
+        if self.session !== session {
+            self.session = session
+            hostingController.rootView = AnyView(MenuBarStatusView(session: session))
+        }
         ensureStatusItem()
-        update(session: session)
-    }
-
-    func update(session: TranslationSessionStore) {
-        self.session = session
-        hostingController.rootView = AnyView(MenuBarStatusView(session: session))
         updateStatusButton(using: session)
-    }
-
-    func popoverDidShow(_ notification: Notification) {
-        refreshButtonAppearance()
-    }
-
-    func popoverDidClose(_ notification: Notification) {
-        refreshButtonAppearance()
+        observeSessionStateIfNeeded()
     }
 
     @objc
@@ -59,13 +40,6 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         } else {
             popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         }
-
-        refreshButtonAppearance()
-    }
-
-    @objc
-    private func systemAppearanceDidChange(_ notification: Notification) {
-        refreshButtonAppearance()
     }
 
     private func ensureStatusItem() {
@@ -73,7 +47,7 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
             return
         }
 
-        let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        let item = NSStatusBar.system.statusItem(withLength: 28)
         item.isVisible = true
         statusItem = item
 
@@ -86,55 +60,55 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
         button.sendAction(on: [.leftMouseDown])
         button.imagePosition = .imageOnly
         button.imageScaling = .scaleProportionallyDown
+        button.image = MenuBarMiniAppIconRenderer.image()
         button.toolTip = AppText.menuBarTitle
     }
 
-    private func refreshButtonAppearance() {
-        guard let session else {
-            return
-        }
-
-        updateStatusButton(using: session)
-    }
-
     private func updateStatusButton(using session: TranslationSessionStore) {
-        refreshStatusItemPositionIfNeeded(session: session)
         guard let button = statusItem?.button else {
             return
         }
 
-        applyMenuBarAppearance(to: button)
         let title = menuBarTitle(for: session)
-
-        statusItem?.length = 28
-        button.attributedTitle = NSAttributedString(string: "")
-        button.image = MenuBarMiniAppIconRenderer.image()
-        button.toolTip = session.statusMessage
-        button.setAccessibilityTitle(title)
+        if button.toolTip != title {
+            button.toolTip = title
+        }
+        if button.accessibilityTitle() != title {
+            button.setAccessibilityTitle(title)
+        }
     }
 
-    private func applyMenuBarAppearance(to button: NSStatusBarButton) {
-        button.appearance = isSystemDarkMode ? NSAppearance(named: .darkAqua) : nil
-    }
-
-    private var isSystemDarkMode: Bool {
-        UserDefaults.standard.string(forKey: "AppleInterfaceStyle") == "Dark"
-    }
-
-    private func refreshStatusItemPositionIfNeeded(session: TranslationSessionStore) {
-        let isActive = session.isRunning || session.isPaused
-        guard isActive != lastWasActive else {
+    private func observeSessionStateIfNeeded() {
+        guard !isObservingSession, session != nil else {
             return
         }
 
-        lastWasActive = isActive
-        guard let statusItem else {
+        isObservingSession = true
+        trackSessionState()
+    }
+
+    private func trackSessionState() {
+        guard let session else {
+            isObservingSession = false
             return
         }
 
-        NSStatusBar.system.removeStatusItem(statusItem)
-        self.statusItem = nil
-        ensureStatusItem()
+        withObservationTracking {
+            _ = session.isRunning
+            _ = session.isPaused
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else {
+                    return
+                }
+                guard let session = self.session else {
+                    self.isObservingSession = false
+                    return
+                }
+                self.updateStatusButton(using: session)
+                self.trackSessionState()
+            }
+        }
     }
 
     private func menuBarTitle(for session: TranslationSessionStore) -> String {
@@ -151,12 +125,10 @@ final class MenuBarPanelController: NSObject, NSPopoverDelegate {
 
 @MainActor
 private enum MenuBarMiniAppIconRenderer {
-    static func image() -> NSImage {
-        if let appIcon = appIconImage() {
-            return appIcon
-        }
+    private static let cachedImage: NSImage = appIconImage() ?? fallbackImage()
 
-        return fallbackImage()
+    static func image() -> NSImage {
+        cachedImage
     }
 
     private static func appIconImage() -> NSImage? {

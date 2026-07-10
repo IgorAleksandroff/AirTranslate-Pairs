@@ -5,10 +5,13 @@ struct MenuBarPanelInstaller: NSViewRepresentable {
     let controller: MenuBarPanelController
 
     func makeNSView(context _: Context) -> NSView {
-        NSView(frame: .zero)
+        let session = session
+        let controller = controller
+        Task { @MainActor in
+            controller.install(session: session)
+        }
+        return NSView(frame: .zero)
     }
 
-    func updateNSView(_: NSView, context _: Context) {
-        controller.install(session: session)
-    }
+    func updateNSView(_: NSView, context _: Context) {}
 }

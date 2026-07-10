@@ -34,17 +34,25 @@ final class GeminiLiveTranslationService: @unchecked Sendable {
         * maxAudioChunkMilliseconds
         / 1_000
     private static let maxPendingAudioSendCount = 48
+    private static let connectionTimeoutMilliseconds = 10_000
+    private static let maxPreSetupAudioSeconds = 3
+    static let maxPreSetupAudioByteCount = inputAudioSampleRate
+        * bytesPerPCM16Sample
+        * maxPreSetupAudioSeconds
 
     weak var delegate: GeminiLiveTranslationServiceDelegate?
 
     private let stateLock = NSLock()
     private let conversionLock = NSLock()
+    private var urlSession: URLSession?
     private var webSocketTask: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var isPaused = false
     private var isSetupComplete = false
     private var setupError: Error?
     private var pendingAudioSendCount = 0
+    private var preSetupAudioChunks: [String] = []
+    private var preSetupAudioByteCount = 0
 
     func start(targetLanguage: LanguageOption, model: GeminiTranslationModel) async throws {
         stop()
@@ -63,17 +71,28 @@ final class GeminiLiveTranslationService: @unchecked Sendable {
             throw GeminiLiveTranslationError.invalidResponse
         }
 
-        let webSocketTask = URLSession.shared.webSocketTask(with: url)
+        let connectionObserver = GeminiLiveWebSocketConnectionObserver()
+        let urlSession = URLSession(configuration: .default, delegate: connectionObserver, delegateQueue: nil)
+        let webSocketTask = urlSession.webSocketTask(with: url)
         withStateLock {
+            self.urlSession = urlSession
             self.webSocketTask = webSocketTask
             isSetupComplete = false
             setupError = nil
+            preSetupAudioChunks = []
+            preSetupAudioByteCount = 0
         }
         webSocketTask.resume()
 
-        try await waitForWebSocketConnection(webSocketTask)
-        receiveTask = Task { [weak self] in
-            await self?.receiveLoop()
+        do {
+            try await connectionObserver.waitForOpen(timeoutMilliseconds: Self.connectionTimeoutMilliseconds)
+        } catch {
+            throw Self.publicConnectionError(from: error)
+        }
+        withStateLock {
+            receiveTask = Task { [weak self] in
+                await self?.receiveLoop()
+            }
         }
         try await sendSetupMessage(model: model, targetLanguage: targetLanguage)
         try await waitForSetupComplete()
@@ -82,16 +101,35 @@ final class GeminiLiveTranslationService: @unchecked Sendable {
     func append(_ sampleBuffer: CMSampleBuffer) {
         stateLock.lock()
         let isPaused = isPaused
-        let isSetupComplete = isSetupComplete
-        let webSocketTask = webSocketTask
+        let hasActiveWebSocketTask = webSocketTask != nil
         stateLock.unlock()
 
-        guard !isPaused, isSetupComplete, let webSocketTask else { return }
+        guard !isPaused, hasActiveWebSocketTask else { return }
 
         conversionLock.lock()
         let audioChunks = pcm16Base64AudioChunks(from: sampleBuffer)
         conversionLock.unlock()
 
+        sendOrBufferAudioChunks(audioChunks)
+    }
+
+    func sendOrBufferAudioChunks(_ audioChunks: [String]) {
+        guard !audioChunks.isEmpty else { return }
+
+        stateLock.lock()
+        guard isSetupComplete else {
+            bufferPreSetupAudioChunksLocked(audioChunks)
+            stateLock.unlock()
+            return
+        }
+        let webSocketTask = webSocketTask
+        stateLock.unlock()
+
+        guard let webSocketTask else { return }
+        sendAudioChunks(audioChunks, over: webSocketTask)
+    }
+
+    private func sendAudioChunks(_ audioChunks: [String], over webSocketTask: URLSessionWebSocketTask) {
         for audioData in audioChunks {
             let event = GeminiLiveRealtimeInputMessage(
                 realtimeInput: GeminiLiveRealtimeInput(
@@ -108,9 +146,31 @@ final class GeminiLiveTranslationService: @unchecked Sendable {
             webSocketTask.send(.string(text)) { [weak self] error in
                 self?.releaseAudioSendSlot()
                 guard let error, let self else { return }
-                self.delegate?.geminiLiveTranslationService(self, didFail: error)
+                self.delegate?.geminiLiveTranslationService(
+                    self,
+                    didFail: Self.publicConnectionError(from: error)
+                )
             }
         }
+    }
+
+    private func bufferPreSetupAudioChunksLocked(_ audioChunks: [String]) {
+        for chunk in audioChunks {
+            preSetupAudioChunks.append(chunk)
+            preSetupAudioByteCount += Self.estimatedPCM16ByteCount(ofBase64: chunk)
+        }
+        while preSetupAudioByteCount > Self.maxPreSetupAudioByteCount, preSetupAudioChunks.count > 1 {
+            let removed = preSetupAudioChunks.removeFirst()
+            preSetupAudioByteCount -= Self.estimatedPCM16ByteCount(ofBase64: removed)
+        }
+    }
+
+    private static func estimatedPCM16ByteCount(ofBase64 chunk: String) -> Int {
+        chunk.utf8.count / 4 * 3
+    }
+
+    var bufferedPreSetupAudioChunks: [String] {
+        withStateLock { preSetupAudioChunks }
     }
 
     func setPaused(_ isPaused: Bool) {
@@ -121,18 +181,36 @@ final class GeminiLiveTranslationService: @unchecked Sendable {
 
     func stop() {
         setPaused(false)
-        receiveTask?.cancel()
-        receiveTask = nil
-        webSocketTask?.cancel(with: .goingAway, reason: nil)
-        webSocketTask = nil
         stateLock.lock()
+        let receiveTask = receiveTask
+        let webSocketTask = webSocketTask
+        let urlSession = urlSession
+        self.receiveTask = nil
+        self.webSocketTask = nil
+        self.urlSession = nil
         isSetupComplete = false
         setupError = nil
         pendingAudioSendCount = 0
+        preSetupAudioChunks = []
+        preSetupAudioByteCount = 0
         stateLock.unlock()
+        receiveTask?.cancel()
+        webSocketTask?.cancel(with: .goingAway, reason: nil)
+        urlSession?.finishTasksAndInvalidate()
     }
 
     private func sendSetupMessage(model: GeminiTranslationModel, targetLanguage: LanguageOption) async throws {
+        let data = try Self.encodedSetupMessage(model: model, targetLanguage: targetLanguage)
+        guard let text = String(data: data, encoding: .utf8) else {
+            throw GeminiLiveTranslationError.invalidResponse
+        }
+        try await send(text)
+    }
+
+    nonisolated static func encodedSetupMessage(
+        model: GeminiTranslationModel,
+        targetLanguage: LanguageOption
+    ) throws -> Data {
         let event = GeminiLiveSetupMessage(
             setup: GeminiLiveSetup(
                 model: "models/\(model.apiModelID)",
@@ -143,45 +221,19 @@ final class GeminiLiveTranslationService: @unchecked Sendable {
                         echoTargetLanguage: true
                     )
                 ),
+                realtimeInputConfig: GeminiLiveRealtimeInputConfig(
+                    automaticActivityDetection: GeminiLiveActivityDetection(
+                        startOfSpeechSensitivity: "START_SENSITIVITY_HIGH",
+                        endOfSpeechSensitivity: "END_SENSITIVITY_HIGH",
+                        silenceDurationMs: 250,
+                        prefixPaddingMs: 120
+                    )
+                ),
                 inputAudioTranscription: GeminiLiveEmptyObject(),
                 outputAudioTranscription: GeminiLiveEmptyObject()
             )
         )
-        let data = try JSONEncoder().encode(event)
-        guard let text = String(data: data, encoding: .utf8) else {
-            throw GeminiLiveTranslationError.invalidResponse
-        }
-        try await send(text)
-    }
-
-    private func waitForWebSocketConnection(_ webSocketTask: URLSessionWebSocketTask) async throws {
-        var lastError: Error?
-
-        for attempt in 0..<40 {
-            do {
-                try await sendPing(webSocketTask)
-                return
-            } catch {
-                lastError = error
-                guard Self.isSocketNotConnectedError(error) else { throw error }
-                let delay = min(100 + (attempt * 50), 500)
-                try await Task.sleep(for: .milliseconds(delay))
-            }
-        }
-
-        throw lastError ?? GeminiLiveTranslationError.setupTimedOut
-    }
-
-    private func sendPing(_ webSocketTask: URLSessionWebSocketTask) async throws {
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            webSocketTask.sendPing { error in
-                if let error {
-                    continuation.resume(throwing: error)
-                } else {
-                    continuation.resume()
-                }
-            }
-        }
+        return try JSONEncoder().encode(event)
     }
 
     private func waitForSetupComplete() async throws {
@@ -213,7 +265,7 @@ final class GeminiLiveTranslationService: @unchecked Sendable {
                 return
             } catch {
                 guard retryCount < 40, Self.isSocketNotConnectedError(error) else {
-                    throw error
+                    throw Self.publicConnectionError(from: error)
                 }
 
                 retryCount += 1
@@ -235,8 +287,30 @@ final class GeminiLiveTranslationService: @unchecked Sendable {
         }
     }
 
-    private nonisolated static func isSocketNotConnectedError(_ error: Error) -> Bool {
-        error.localizedDescription.localizedCaseInsensitiveContains("socket is not connected")
+    nonisolated static func isSocketNotConnectedError(_ error: Error) -> Bool {
+        var nsError = error as NSError
+        while true {
+            if nsError.domain == NSPOSIXErrorDomain, nsError.code == Int(ENOTCONN) {
+                return true
+            }
+            if nsError.domain == NSURLErrorDomain, nsError.code == NSURLErrorNetworkConnectionLost {
+                return true
+            }
+            guard let underlyingError = nsError.userInfo[NSUnderlyingErrorKey] as? NSError else {
+                return false
+            }
+            nsError = underlyingError
+        }
+    }
+
+    nonisolated static func publicConnectionError(from error: Error) -> Error {
+        if error is CancellationError {
+            return error
+        }
+        if error is GeminiLiveTranslationError {
+            return error
+        }
+        return GeminiLiveTranslationError.connectionFailed
     }
 
     private func withStateLock<T>(_ body: () throws -> T) rethrows -> T {
@@ -261,8 +335,9 @@ final class GeminiLiveTranslationService: @unchecked Sendable {
                 }
             } catch {
                 guard !Task.isCancelled else { return }
-                recordSetupFailureIfNeeded(error)
-                delegate?.geminiLiveTranslationService(self, didFail: error)
+                let publicError = Self.publicConnectionError(from: error)
+                recordSetupFailureIfNeeded(publicError)
+                delegate?.geminiLiveTranslationService(self, didFail: publicError)
                 return
             }
         }
@@ -329,10 +404,33 @@ final class GeminiLiveTranslationService: @unchecked Sendable {
     }
 
     private func markSetupComplete() {
-        stateLock.lock()
-        isSetupComplete = true
-        setupError = nil
-        stateLock.unlock()
+        while true {
+            stateLock.lock()
+            guard let webSocketTask, !preSetupAudioChunks.isEmpty else {
+                isSetupComplete = true
+                setupError = nil
+                preSetupAudioChunks = []
+                preSetupAudioByteCount = 0
+                stateLock.unlock()
+                return
+            }
+            let bufferedChunks = preSetupAudioChunks
+            preSetupAudioChunks = []
+            preSetupAudioByteCount = 0
+            stateLock.unlock()
+
+            sendAudioChunks(coalescedAudioChunks(bufferedChunks), over: webSocketTask)
+        }
+    }
+
+    func coalescedAudioChunks(_ chunks: [String]) -> [String] {
+        var audioData = Data()
+        for chunk in chunks {
+            guard let decoded = Data(base64Encoded: chunk) else { continue }
+            audioData.append(decoded)
+        }
+        guard !audioData.isEmpty else { return [] }
+        return base64PCM16Chunks(from: audioData)
     }
 
     private func recordSetupFailureIfNeeded(_ error: Error) {
@@ -455,6 +553,70 @@ final class GeminiLiveTranslationService: @unchecked Sendable {
     }
 }
 
+final class GeminiLiveWebSocketConnectionObserver: NSObject, URLSessionWebSocketDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Void, Error>?
+    private var completedResult: Result<Void, Error>?
+
+    func waitForOpen(timeoutMilliseconds: Int) async throws {
+        let timeoutTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(timeoutMilliseconds))
+            guard !Task.isCancelled else { return }
+            self?.resolve(.failure(GeminiLiveTranslationError.setupTimedOut))
+        }
+        defer { timeoutTask.cancel() }
+
+        try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+                register(continuation)
+            }
+        } onCancel: {
+            resolve(.failure(CancellationError()))
+        }
+    }
+
+    func urlSession(
+        _ session: URLSession,
+        webSocketTask: URLSessionWebSocketTask,
+        didOpenWithProtocol `protocol`: String?
+    ) {
+        resolve(.success(()))
+    }
+
+    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        guard let error else { return }
+        resolve(.failure(error))
+    }
+
+    func urlSession(_ session: URLSession, didBecomeInvalidWithError error: Error?) {
+        resolve(.failure(error ?? GeminiLiveTranslationError.setupTimedOut))
+    }
+
+    private func register(_ continuation: CheckedContinuation<Void, Error>) {
+        lock.lock()
+        if let completedResult {
+            lock.unlock()
+            continuation.resume(with: completedResult)
+            return
+        }
+        self.continuation = continuation
+        lock.unlock()
+    }
+
+    private func resolve(_ result: Result<Void, Error>) {
+        lock.lock()
+        guard completedResult == nil else {
+            lock.unlock()
+            return
+        }
+        completedResult = result
+        let continuation = continuation
+        self.continuation = nil
+        lock.unlock()
+        continuation?.resume(with: result)
+    }
+}
+
 private struct GeminiLiveSetupMessage: Encodable {
     let setup: GeminiLiveSetup
 }
@@ -462,8 +624,20 @@ private struct GeminiLiveSetupMessage: Encodable {
 private struct GeminiLiveSetup: Encodable {
     let model: String
     let generationConfig: GeminiLiveGenerationConfig
+    let realtimeInputConfig: GeminiLiveRealtimeInputConfig?
     let inputAudioTranscription: GeminiLiveEmptyObject
     let outputAudioTranscription: GeminiLiveEmptyObject
+}
+
+private struct GeminiLiveRealtimeInputConfig: Encodable {
+    let automaticActivityDetection: GeminiLiveActivityDetection
+}
+
+private struct GeminiLiveActivityDetection: Encodable {
+    let startOfSpeechSensitivity: String
+    let endOfSpeechSensitivity: String
+    let silenceDurationMs: Int
+    let prefixPaddingMs: Int
 }
 
 private struct GeminiLiveGenerationConfig: Encodable {
@@ -532,6 +706,7 @@ enum GeminiLiveTranslationError: LocalizedError {
     case missingAPIKey
     case invalidResponse
     case setupTimedOut
+    case connectionFailed
     case server(String?)
 
     var errorDescription: String? {
@@ -542,6 +717,8 @@ enum GeminiLiveTranslationError: LocalizedError {
             AppText.geminiInvalidResponse
         case .setupTimedOut:
             AppText.geminiInvalidResponse
+        case .connectionFailed:
+            AppText.geminiConnectionFailed
         case let .server(message):
             message ?? AppText.geminiInvalidResponse
         }

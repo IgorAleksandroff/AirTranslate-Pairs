@@ -35,13 +35,13 @@ private struct CaptionBoardHeader: View {
 
     var body: some View {
         SessionOverviewCard(
+            session: session,
             title: AppText.transcriptWorkspace,
             subtitle: session.languageSummary,
             isRunning: session.isRunning,
             isStarting: session.isStarting,
             isPaused: session.isPaused,
             statusMessage: session.statusMessage,
-            audioLevel: session.latestAudioLevel,
             isFloatingCaptionVisible: isFloatingCaptionVisible
         )
     }
@@ -49,7 +49,17 @@ private struct CaptionBoardHeader: View {
 
 private struct CaptionTranscriptFeed: View {
     @Bindable var session: TranslationSessionStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var longSessionAutoScrollTask: Task<Void, Never>?
+
+    private struct LatestLineKey: Equatable {
+        let id: UUID
+        let revision: Int
+    }
+
+    private var latestLineKey: LatestLineKey? {
+        session.lines.last.map { LatestLineKey(id: $0.id, revision: $0.revision) }
+    }
 
     var body: some View {
         if !session.hasTranscriptContent && !session.isRunning {
@@ -91,23 +101,32 @@ private struct CaptionTranscriptFeed: View {
                             line: line,
                             showsTranslationPane: session.shouldShowTranslationPane
                         )
+                            .equatable()
                             .id(line.id)
-                            .transition(.move(edge: .bottom).combined(with: .opacity))
+                            .transition(
+                                reduceMotion
+                                    ? .opacity
+                                    : .move(edge: .bottom).combined(with: .opacity)
+                            )
                     }
                 }
                 .padding(.vertical, 4)
-                .animation(.spring(response: 0.32, dampingFraction: 0.86), value: session.lines.count)
+                .animation(
+                    reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86),
+                    value: session.lines.count
+                )
             }
-            .onChange(of: session.lines.last?.id) { _, id in
-                if let id {
-                    withAnimation(.easeOut(duration: 0.22)) {
-                        proxy.scrollTo(id, anchor: .bottom)
+            .onChange(of: latestLineKey) { oldValue, newValue in
+                guard let newValue else { return }
+
+                if newValue.id != oldValue?.id {
+                    longSessionAutoScrollTask?.cancel()
+                    longSessionAutoScrollTask = nil
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.22)) {
+                        proxy.scrollTo(newValue.id, anchor: .bottom)
                     }
-                }
-            }
-            .onChange(of: session.lines.last?.revision) { _, _ in
-                if let id = session.lines.last?.id {
-                    scrollToLatestRevision(id, proxy: proxy)
+                } else {
+                    scrollToLatestRevision(newValue.id, proxy: proxy)
                 }
             }
         }
@@ -134,9 +153,15 @@ private struct CaptionTranscriptFeed: View {
     }
 }
 
-private struct CaptionLineView: View {
+private struct CaptionLineView: View, Equatable {
     let line: CaptionLine
     let showsTranslationPane: Bool
+
+    nonisolated static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.line.id == rhs.line.id
+            && lhs.line.revision == rhs.line.revision
+            && lhs.showsTranslationPane == rhs.showsTranslationPane
+    }
 
     var body: some View {
         Group {
@@ -158,7 +183,6 @@ private struct CaptionLineView: View {
             description: AppText.originalDescription,
             text: line.sourceText,
             displayText: line.sourceDisplayText,
-            revision: line.revision,
             isPrimary: true
         )
     }
@@ -169,7 +193,6 @@ private struct CaptionLineView: View {
             description: AppText.translationDescription,
             text: line.translatedText,
             displayText: line.translatedDisplayText,
-            revision: line.revision,
             isPrimary: false
         )
     }
@@ -180,8 +203,8 @@ private struct TranscriptPane: View {
     let description: String
     let text: String
     let displayText: String
-    let revision: Int
     let isPrimary: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isTextOverflowing = false
     @State private var isReadingBack = false
     @State private var isCopyFeedbackVisible = false
@@ -193,6 +216,7 @@ private struct TranscriptPane: View {
                 Text(title)
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
+                    .accessibilityAddTraits(.isHeader)
 
                 Spacer(minLength: 8)
 
@@ -224,12 +248,12 @@ private struct TranscriptPane: View {
 
             Text(description)
                 .font(.caption)
-                .foregroundStyle(.tertiary)
+                .foregroundStyle(.secondary)
 
             ScrollableTranscriptText(
                 text: displayText,
-                revision: revision,
                 weight: isPrimary ? .regular : .medium,
+                accessibilityLabel: title,
                 isOverflowing: $isTextOverflowing,
                 isReadingBack: $isReadingBack
             )
@@ -250,6 +274,16 @@ private struct TranscriptPane: View {
             RoundedRectangle(cornerRadius: 18, style: .continuous)
                 .strokeBorder(Color.primary.opacity(0.08))
         }
+        .task(id: copyFeedbackToken) {
+            guard isCopyFeedbackVisible else { return }
+
+            try? await Task.sleep(for: .milliseconds(900))
+            guard !Task.isCancelled else { return }
+
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                isCopyFeedbackVisible = false
+            }
+        }
     }
 
     private var canCopy: Bool {
@@ -268,31 +302,21 @@ private struct TranscriptPane: View {
 
     private func showCopyFeedback() {
         copyFeedbackToken += 1
-        let token = copyFeedbackToken
 
-        withAnimation(.snappy(duration: 0.16)) {
+        withAnimation(reduceMotion ? nil : .snappy(duration: 0.16)) {
             isCopyFeedbackVisible = true
-        }
-
-        Task {
-            try? await Task.sleep(for: .milliseconds(900))
-            await MainActor.run {
-                guard token == copyFeedbackToken else { return }
-
-                withAnimation(.easeOut(duration: 0.18)) {
-                    isCopyFeedbackVisible = false
-                }
-            }
         }
     }
 }
 
 private struct TranscriptPaneCopyButtonStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .scaleEffect(configuration.isPressed ? 0.88 : 1)
+            .scaleEffect(reduceMotion ? 1 : (configuration.isPressed ? 0.88 : 1))
             .opacity(configuration.isPressed ? 0.72 : 1)
-            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: configuration.isPressed)
     }
 }
 
@@ -327,8 +351,8 @@ private struct TranscriptScrollFadeMask: View {
 
 private struct ScrollableTranscriptText: NSViewRepresentable {
     let text: String
-    let revision: Int
     let weight: NSFont.Weight
+    let accessibilityLabel: String
     @Binding var isOverflowing: Bool
     @Binding var isReadingBack: Bool
 
@@ -344,6 +368,7 @@ private struct ScrollableTranscriptText: NSViewRepresentable {
         scrollView.borderType = .noBorder
         scrollView.drawsBackground = false
         scrollView.contentView.postsBoundsChangedNotifications = true
+        scrollView.setAccessibilityLabel(accessibilityLabel)
 
         let textView = NSTextView()
         textView.isEditable = false
@@ -363,6 +388,7 @@ private struct ScrollableTranscriptText: NSViewRepresentable {
         textView.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude, height: CGFloat.greatestFiniteMagnitude)
         textView.frame = NSRect(origin: .zero, size: scrollView.contentSize)
         textView.autoresizingMask = [.width]
+        textView.setAccessibilityLabel(accessibilityLabel)
 
         scrollView.documentView = textView
         context.coordinator.attach(to: scrollView)
@@ -373,27 +399,26 @@ private struct ScrollableTranscriptText: NSViewRepresentable {
         guard let textView = scrollView.documentView as? NSTextView else { return }
 
         let contentWidth = scrollView.contentSize.width
-        let textChanged = context.coordinator.lastRevision != revision
-            || context.coordinator.lastTextLength != text.utf16.count
+        let textChanged = textView.string != text
         let widthChanged = abs(context.coordinator.lastContentWidth - contentWidth) > 0.5
         let weightChanged = context.coordinator.lastWeight != weight
         guard textChanged || widthChanged || weightChanged else { return }
 
         let shouldStayPinnedToBottom = isPinnedToBottom(scrollView)
-        if textView.string != text {
+        if textChanged {
             textView.string = text
         }
 
         textView.font = NSFont.systemFont(ofSize: NSFont.systemFontSize, weight: weight)
         textView.textColor = .labelColor
+        scrollView.setAccessibilityLabel(accessibilityLabel)
+        textView.setAccessibilityLabel(accessibilityLabel)
         textView.textContainer?.containerSize = NSSize(
             width: contentWidth,
             height: CGFloat.greatestFiniteMagnitude
         )
         let documentHeight = updateDocumentSize(textView, in: scrollView)
         context.coordinator.recordLayoutInput(
-            revision: revision,
-            textLength: text.utf16.count,
             contentWidth: contentWidth,
             weight: weight
         )
@@ -439,8 +464,6 @@ private struct ScrollableTranscriptText: NSViewRepresentable {
         private var isOverflowing: Binding<Bool>
         private var isReadingBack: Binding<Bool>
         private weak var scrollView: NSScrollView?
-        var lastRevision: Int?
-        var lastTextLength = -1
         var lastContentWidth: CGFloat = -1
         var lastWeight: NSFont.Weight?
 
@@ -474,14 +497,7 @@ private struct ScrollableTranscriptText: NSViewRepresentable {
             self.isReadingBack.wrappedValue = isReadingBack
         }
 
-        func recordLayoutInput(
-            revision: Int,
-            textLength: Int,
-            contentWidth: CGFloat,
-            weight: NSFont.Weight
-        ) {
-            lastRevision = revision
-            lastTextLength = textLength
+        func recordLayoutInput(contentWidth: CGFloat, weight: NSFont.Weight) {
             lastContentWidth = contentWidth
             lastWeight = weight
         }
@@ -511,14 +527,15 @@ private struct ScrollableTranscriptText: NSViewRepresentable {
 }
 
 private struct SessionOverviewCard: View {
+    let session: TranslationSessionStore
     let title: String
     let subtitle: String
     let isRunning: Bool
     let isStarting: Bool
     let isPaused: Bool
     let statusMessage: String
-    let audioLevel: Float?
     let isFloatingCaptionVisible: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
@@ -539,18 +556,18 @@ private struct SessionOverviewCard: View {
                 .help(headerIconHelp)
                 .accessibilityLabel(title)
                 .accessibilityValue(headerIconValue)
-                .animation(.spring(response: 0.22, dampingFraction: 0.78), value: isFloatingCaptionVisible)
+                .animation(
+                    reduceMotion ? nil : .spring(response: 0.22, dampingFraction: 0.78),
+                    value: isFloatingCaptionVisible
+                )
 
-            HeaderAudioLevelStrip(
-                isRunning: isRunning,
-                isPaused: isPaused,
-                audioLevel: audioLevel
-            )
-            .frame(maxWidth: .infinity)
-            .opacity(isRunning ? 1 : 0)
-            .accessibilityHidden(!isRunning)
-            .overlay {
-                if !isRunning {
+            Group {
+                if isRunning {
+                    HeaderAudioLevelStrip(
+                        session: session,
+                        isPaused: isPaused
+                    )
+                } else {
                     HeaderStatusMessage(
                         statusMessage: statusMessage,
                         isStarting: isStarting,
@@ -558,6 +575,7 @@ private struct SessionOverviewCard: View {
                     )
                 }
             }
+            .frame(maxWidth: .infinity)
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
@@ -582,7 +600,11 @@ private struct SessionOverviewCard: View {
     }
 
     private var isBlocked: Bool {
-        !isRunning && !isStarting && statusMessage != AppText.ready && statusMessage != AppText.stopped
+        !isRunning
+            && !isStarting
+            && statusMessage != AppText.ready
+            && statusMessage != AppText.stopped
+            && statusMessage != AppText.transcriptSavedToast
     }
 }
 
@@ -646,12 +668,12 @@ private struct HeaderStatusMessage: View {
 }
 
 private struct HeaderAudioLevelStrip: View {
-    let isRunning: Bool
+    let session: TranslationSessionStore
     let isPaused: Bool
-    let audioLevel: Float?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var title: String {
-        isPaused ? AppText.paused : (isRunning ? AppText.listening : AppText.idle)
+        isPaused ? AppText.paused : AppText.listening
     }
 
     private var foregroundStyle: Color {
@@ -659,48 +681,50 @@ private struct HeaderAudioLevelStrip: View {
     }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 0.08)) { timeline in
-            ZStack {
-                Capsule(style: .continuous)
-                    .fill(foregroundStyle.opacity(isPaused ? 0.14 : 0.11))
+        ZStack {
+            Capsule(style: .continuous)
+                .fill(foregroundStyle.opacity(isPaused ? 0.14 : 0.11))
 
-                Capsule(style: .continuous)
-                    .strokeBorder(foregroundStyle.opacity(isPaused ? 0.34 : 0.42), lineWidth: 1)
+            Capsule(style: .continuous)
+                .strokeBorder(foregroundStyle.opacity(isPaused ? 0.34 : 0.42), lineWidth: 1)
 
+            HStack(spacing: 8) {
                 if isPaused {
                     Image(systemName: "pause.fill")
-                        .font(.system(size: 12, weight: .black))
+                        .font(.system(size: 11, weight: .black))
                         .foregroundStyle(foregroundStyle)
-                } else {
+                }
+
+                Text(title)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(foregroundStyle)
+                    .lineLimit(1)
+
+                if !isPaused {
                     AudioLevelWaveform(
-                        level: audioLevel,
-                        date: timeline.date,
-                        barCount: 18,
-                        width: 136,
-                        height: 24,
-                        barWidth: 3.4,
-                        barSpacing: 3.2
+                        level: session.latestAudioLevel,
+                        date: Date(),
+                        barCount: 8,
+                        width: 62,
+                        height: 20,
+                        barWidth: 3.2,
+                        barSpacing: 2.4
                     )
                 }
             }
-            .frame(width: 164, height: 34)
-            .shadow(color: foregroundStyle.opacity(isRunning && !isPaused ? 0.18 : 0), radius: 12)
-            .help(title)
-            .accessibilityLabel(title)
-            .accessibilityValue(accessibilityValue)
-            .animation(.spring(response: 0.26, dampingFraction: 0.82), value: isRunning)
-            .animation(.spring(response: 0.26, dampingFraction: 0.82), value: isPaused)
-            .animation(.spring(response: 0.16, dampingFraction: 0.78), value: audioLevel)
+            .padding(.horizontal, 10)
         }
+        .frame(width: 164, height: 34)
+        .shadow(color: foregroundStyle.opacity(isPaused ? 0 : 0.18), radius: 12)
+        .help(title)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .animation(
+            reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.82),
+            value: isPaused
+        )
     }
 
-    private var accessibilityValue: String {
-        guard let audioLevel, isRunning, !isPaused else {
-            return title
-        }
-
-        return "\(title), \(Int(audioLevel.rounded())) dB"
-    }
 }
 
 private struct AudioLevelWaveform: View {

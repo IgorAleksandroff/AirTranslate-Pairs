@@ -6,6 +6,29 @@ All notable changes to AirTranslate are documented in this file.
 
 No unreleased changes yet.
 
+## 1.4.0 - 2026-07-10
+
+### Added
+
+- Added 30-second in-session transcript checkpoints that update the same files without stopping capture.
+- Added native macOS capture shortcuts for start/stop and pause/resume.
+- Added focused regression coverage for long sessions, realtime transcript tails, provider retries, floating-window placement, and translated-speech backlog behavior.
+
+### Changed
+
+- Long Apple sessions now coalesce recognition and presentation updates automatically after 4,000 characters, move expensive translation preparation off the MainActor, and use a bounded LRU segment cache.
+- Gemini Live now configures low-latency activity detection and buffers a bounded amount of audio while setup completes.
+- OpenAI text translation now streams partial results, applies bounded request timeouts, and retries rate-limit or server failures once.
+- Realtime translated audio and Apple speech output now bound stale backlog instead of drifting farther behind live captions.
+- The main workspace, sidebar, menu bar, floating captions, and settings surfaces now use clearer state hierarchy, keyboard access, and reduced-motion behavior.
+
+### Fixed
+
+- Fixed suppressed realtime transcript tails and empty completion events losing the last recognized words.
+- Fixed pause, stop, and app termination paths so pending caption text is flushed before saving.
+- Fixed floating caption windows reopening outside the visible area after display changes.
+- Fixed Gemini connection failures potentially exposing an authenticated WebSocket URL in user-visible error text.
+
 ## 1.3.6 - 2026-06-13
 
 ### Added

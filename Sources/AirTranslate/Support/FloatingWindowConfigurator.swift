@@ -38,6 +38,7 @@ struct FloatingWindowConfigurator: NSViewRepresentable {
     }
 
     private func keepWindowVisible(_ window: NSWindow) {
+        guard window.isVisible else { return }
         guard let visibleFrame = (window.screen ?? NSScreen.main)?.visibleFrame else { return }
 
         let inset: CGFloat = 16

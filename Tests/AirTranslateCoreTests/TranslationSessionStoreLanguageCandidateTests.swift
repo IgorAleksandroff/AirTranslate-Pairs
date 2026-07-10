@@ -366,6 +366,35 @@ struct TranslationSessionStoreLanguageCandidateTests {
 
     @Test
     @MainActor
+    func openAIModeKeepsVoiceAgentModelsOutOfTranslationEndpoint() {
+        let session = TranslationSessionStore()
+
+        #expect(OpenAIRealtimeTranslationModel.liveTranslationCases == [.gptRealtimeTranslate])
+        #expect(OpenAIRealtimeTranslationModel.voiceAgentCases.contains(.gptRealtime21))
+        #expect(OpenAIRealtimeTranslationModel.voiceAgentCases.contains(.gptRealtime21Mini))
+        #expect(!OpenAIRealtimeTranslationModel.gptRealtime21.usesRealtimeAudioTranslation)
+        #expect(!OpenAIRealtimeTranslationModel.gptRealtime21Mini.usesRealtimeAudioTranslation)
+
+        session.openAITranslationModel = .gptRealtime21
+
+        #expect(session.openAITranslationModel == .gptRealtimeTranslate)
+        #expect(session.isUsingOpenAIRealtime)
+        #expect(session.isUsingProviderRealtimeTranslation)
+
+        session.useGPTRealtimeMode(model: .gptRealtime21Mini)
+
+        #expect(session.openAITranslationModel == .gptRealtimeTranslate)
+        #expect(session.openAITranslationModel.apiModelID == "gpt-realtime-translate")
+        #expect(session.isUsingOpenAIRealtime)
+        #expect(session.isUsingProviderRealtimeTranslation)
+
+        session.useGPTRealtimeMode()
+
+        #expect(session.openAITranslationModel == .gptRealtimeTranslate)
+    }
+
+    @Test
+    @MainActor
     func openAIRealtimeTranslationShowsSourceTranscriptAndTranslation() async {
         let session = TranslationSessionStore()
         session.useGPTRealtimeMode()

@@ -35,29 +35,12 @@ struct SidebarView: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
-                StatusPill(
-                    title: session.statusMessage,
-                    symbolName: statusSymbolName,
-                    color: statusColor
-                )
+                SidebarSessionStatus(session: session)
             }
 
             Spacer(minLength: 0)
 
-            if needsPermissionAction {
-                Button {
-                    session.openPrivacySettings()
-                } label: {
-                    Image(systemName: "lock.shield.fill")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(Color.orange)
-                        .frame(width: 28, height: 28)
-                        .background(Color.orange.opacity(0.13), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                }
-                .buttonStyle(.plain)
-                .help(AppText.openPrivacySettings)
-                .accessibilityLabel(AppText.openPrivacySettings)
-            }
+            SidebarPermissionActionButton(session: session)
         }
         .padding(16)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -362,36 +345,6 @@ struct SidebarView: View {
         }
     }
 
-    private var needsPermissionAction: Bool {
-        session.statusMessage.localizedCaseInsensitiveContains("permission")
-            || session.statusMessage.localizedCaseInsensitiveContains("권한")
-    }
-
-    private var statusSymbolName: String {
-        if session.isPaused {
-            return "pause.circle.fill"
-        }
-        if session.isRunning {
-            return "waveform.circle.fill"
-        }
-        if session.statusMessage == AppText.ready {
-            return "circle.fill"
-        }
-        return "circle.dotted"
-    }
-
-    private var statusColor: Color {
-        if session.isPaused {
-            return .orange
-        }
-        if session.isRunning {
-            return .green
-        }
-        if session.statusMessage == AppText.ready {
-            return .green
-        }
-        return .secondary
-    }
 }
 
 private enum SettingsSidebarCopy {
@@ -451,6 +404,95 @@ private enum ProcessingEngine: String, CaseIterable, Identifiable {
             return .gemini
         }
         return .apple
+    }
+}
+
+private struct SidebarSessionStatus: View {
+    let session: TranslationSessionStore
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            StatusPill(
+                title: statusTitle,
+                symbolName: statusSymbolName,
+                color: statusColor
+            )
+
+            if showsDetail {
+                Text(session.statusMessage)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(session.statusMessage)
+            }
+        }
+    }
+
+    private var showsDetail: Bool {
+        (session.isRunning || session.isPaused) && session.statusMessage != statusTitle
+    }
+
+    private var statusTitle: String {
+        if session.isPaused {
+            return AppText.paused
+        }
+        if session.isRunning {
+            return AppText.listening
+        }
+        return session.statusMessage
+    }
+
+    private var statusSymbolName: String {
+        if session.isPaused {
+            return "pause.circle.fill"
+        }
+        if session.isRunning {
+            return "waveform.circle.fill"
+        }
+        if session.statusMessage == AppText.ready {
+            return "circle.fill"
+        }
+        return "circle.dotted"
+    }
+
+    private var statusColor: Color {
+        if session.isPaused {
+            return .orange
+        }
+        if session.isRunning {
+            return .green
+        }
+        if session.statusMessage == AppText.ready {
+            return .green
+        }
+        return .secondary
+    }
+}
+
+private struct SidebarPermissionActionButton: View {
+    let session: TranslationSessionStore
+
+    var body: some View {
+        if needsPermissionAction {
+            Button {
+                session.openPrivacySettings()
+            } label: {
+                Image(systemName: "lock.shield.fill")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Color.orange)
+                    .frame(width: 28, height: 28)
+                    .background(Color.orange.opacity(0.13), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            }
+            .buttonStyle(.plain)
+            .help(AppText.openPrivacySettings)
+            .accessibilityLabel(AppText.openPrivacySettings)
+        }
+    }
+
+    private var needsPermissionAction: Bool {
+        session.statusMessage.localizedCaseInsensitiveContains("permission")
+            || session.statusMessage.localizedCaseInsensitiveContains("권한")
     }
 }
 
@@ -554,8 +596,6 @@ private struct SidebarLanguageRouteControl: View {
             }
             .menuIndicator(.hidden)
             .buttonStyle(.plain)
-            .focusEffectDisabled()
-            .focusable(false)
             .disabled(isDisabled)
             .help(title)
             .accessibilityLabel(languageRouteAccessibilityLabel)
@@ -576,8 +616,6 @@ private struct SidebarLanguageRouteControl: View {
                         }
                 }
                 .buttonStyle(.plain)
-                .focusEffectDisabled()
-                .focusable(false)
                 .disabled(isDisabled || isAutoSourceEnabled)
                 .help(AppText.swapLanguages)
                 .accessibilityLabel(AppText.swapLanguages)
@@ -680,8 +718,6 @@ private struct SidebarLiveTranslationButton: View {
             }
         }
         .buttonStyle(.plain)
-        .focusEffectDisabled()
-        .focusable(false)
         .disabled(isDisabled)
         .help(AppText.liveTranslation)
         .accessibilityLabel(AppText.liveTranslation)

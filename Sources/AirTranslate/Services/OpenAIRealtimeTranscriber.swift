@@ -11,7 +11,7 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         * maxAudioChunkMilliseconds
         / 1_000
     private static let maxPendingAudioSendCount = 48
-    private static let realtimeTranscriptPublishInterval: TimeInterval = 0.08
+    private static let realtimeTranscriptPublishInterval: TimeInterval = 0.05
 
     enum OutputMode {
         case transcription
@@ -28,12 +28,16 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
     private var outputMode = OutputMode.transcription
     private var isPaused = false
     private var pendingAudioSendCount = 0
-    private var realtimeTranscriptionText = ""
-    private var realtimeTranslationInputTranscriptText = ""
-    private var realtimeTranslationOutputTranscriptText = ""
-    private var lastRealtimeTranscriptionPublishAt = Date.distantPast
-    private var lastRealtimeTranslationInputPublishAt = Date.distantPast
-    private var lastRealtimeTranslationOutputPublishAt = Date.distantPast
+    private let proxyTranscriber = LiveSpeechTranscriber()
+    private let realtimeTranscriptionPublishThrottle = RealtimeTranscriptPublishThrottle(
+        publishInterval: OpenAIRealtimeTranscriber.realtimeTranscriptPublishInterval
+    )
+    private let realtimeTranslationInputPublishThrottle = RealtimeTranscriptPublishThrottle(
+        publishInterval: OpenAIRealtimeTranscriber.realtimeTranscriptPublishInterval
+    )
+    private let realtimeTranslationOutputPublishThrottle = RealtimeTranscriptPublishThrottle(
+        publishInterval: OpenAIRealtimeTranscriber.realtimeTranscriptPublishInterval
+    )
 
     func start(language: LanguageOption, model: OpenAIRealtimeTranscriptionModel) async throws {
         try await start(
@@ -182,9 +186,11 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
                 session: OpenAIRealtimeTranslationSession(
                     audio: OpenAIRealtimeTranslationAudio(
                         input: OpenAIRealtimeTranslationAudioInput(
+                            format: OpenAIRealtimeAudioFormat(type: "audio/pcm", rate: Self.realtimeAudioSampleRate),
                             transcription: OpenAIRealtimeTranslationInputTranscription(
                                 model: OpenAIRealtimeTranscriptionModel.gptRealtimeWhisper.rawValue
                             ),
+                            turnDetection: .lowLatencyServerVAD,
                             noiseReduction: OpenAIRealtimeNoiseReduction(type: "near_field")
                         ),
                         output: OpenAIRealtimeTranslationAudioOutput(
@@ -227,7 +233,7 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         }
     }
 
-    private func handleEventText(_ text: String) {
+    func handleEventText(_ text: String) {
         guard let data = text.data(using: .utf8),
               let event = try? JSONDecoder().decode(OpenAIRealtimeTranscriptionEvent.self, from: data)
         else { return }
@@ -249,16 +255,16 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
             "session.input_transcription.completed",
             "session.input_transcript.completed",
             "session.input_transcript.done":
-            guard let transcript = event.transcript, !transcript.isEmpty else { return }
+            let transcript = event.transcript ?? ""
             switch outputMode {
             case .transcription:
-                publishRecognizedTranscript(transcript)
-                realtimeTranscriptionText = ""
-                lastRealtimeTranscriptionPublishAt = .distantPast
+                realtimeTranscriptionPublishThrottle.finish(finalText: transcript) { [weak self] text in
+                    self?.publishRecognizedTranscript(text)
+                }
             case .translationOnly:
-                publishRealtimeTranslationInputTranscript(transcript)
-                realtimeTranslationInputTranscriptText = ""
-                lastRealtimeTranslationInputPublishAt = .distantPast
+                realtimeTranslationInputPublishThrottle.finish(finalText: transcript) { [weak self] text in
+                    self?.publishRealtimeTranslationInputTranscript(text)
+                }
             }
         case "session.output_transcript.delta":
             guard outputMode == .translationOnly,
@@ -267,12 +273,10 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
             appendRealtimeTranslationOutputDelta(delta)
         case "session.output_transcript.completed",
             "session.output_transcript.done":
-            guard outputMode == .translationOnly,
-                  let transcript = event.transcript,
-                  !transcript.isEmpty else { return }
-            publishTranslatedTranscript(transcript)
-            realtimeTranslationOutputTranscriptText = ""
-            lastRealtimeTranslationOutputPublishAt = .distantPast
+            guard outputMode == .translationOnly else { return }
+            realtimeTranslationOutputPublishThrottle.finish(finalText: event.transcript) { [weak self] text in
+                self?.publishTranslatedTranscript(text)
+            }
         case "session.output_audio.delta":
             guard outputMode == .translationOnly,
                   let delta = event.delta,
@@ -290,33 +294,21 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
     }
 
     private func appendRealtimeTranscriptionDelta(_ delta: String) {
-        realtimeTranscriptionText += delta
-        let now = Date()
-        guard now.timeIntervalSince(lastRealtimeTranscriptionPublishAt) >= Self.realtimeTranscriptPublishInterval else {
-            return
+        realtimeTranscriptionPublishThrottle.append(delta) { [weak self] text in
+            self?.publishRecognizedTranscript(text)
         }
-        lastRealtimeTranscriptionPublishAt = now
-        publishRecognizedTranscript(realtimeTranscriptionText)
     }
 
     private func appendRealtimeTranslationInputDelta(_ delta: String) {
-        realtimeTranslationInputTranscriptText += delta
-        let now = Date()
-        guard now.timeIntervalSince(lastRealtimeTranslationInputPublishAt) >= Self.realtimeTranscriptPublishInterval else {
-            return
+        realtimeTranslationInputPublishThrottle.append(delta) { [weak self] text in
+            self?.publishRealtimeTranslationInputTranscript(text)
         }
-        lastRealtimeTranslationInputPublishAt = now
-        publishRealtimeTranslationInputTranscript(realtimeTranslationInputTranscriptText)
     }
 
     private func appendRealtimeTranslationOutputDelta(_ delta: String) {
-        realtimeTranslationOutputTranscriptText += delta
-        let now = Date()
-        guard now.timeIntervalSince(lastRealtimeTranslationOutputPublishAt) >= Self.realtimeTranscriptPublishInterval else {
-            return
+        realtimeTranslationOutputPublishThrottle.append(delta) { [weak self] text in
+            self?.publishTranslatedTranscript(text)
         }
-        lastRealtimeTranslationOutputPublishAt = now
-        publishTranslatedTranscript(realtimeTranslationOutputTranscriptText)
     }
 
     private func publishRecognizedTranscript(_ text: String) {
@@ -346,16 +338,9 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
     }
 
     private func resetRealtimeTranscriptBuffers() {
-        realtimeTranscriptionText = ""
-        realtimeTranslationInputTranscriptText = ""
-        realtimeTranslationOutputTranscriptText = ""
-        lastRealtimeTranscriptionPublishAt = .distantPast
-        lastRealtimeTranslationInputPublishAt = .distantPast
-        lastRealtimeTranslationOutputPublishAt = .distantPast
-    }
-
-    private var proxyTranscriber: LiveSpeechTranscriber {
-        LiveSpeechTranscriber()
+        realtimeTranscriptionPublishThrottle.reset()
+        realtimeTranslationInputPublishThrottle.reset()
+        realtimeTranslationOutputPublishThrottle.reset()
     }
 
     private func pcm16Base64AudioChunks(from sampleBuffer: CMSampleBuffer) -> [String] {
@@ -438,6 +423,91 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
     }
 }
 
+final class RealtimeTranscriptPublishThrottle: @unchecked Sendable {
+    private let lock = NSLock()
+    private let publishInterval: TimeInterval
+    private var text = ""
+    private var lastPublishAt = Date.distantPast
+    private var pendingFlushTask: Task<Void, Never>?
+
+    init(publishInterval: TimeInterval) {
+        self.publishInterval = publishInterval
+    }
+
+    func append(_ delta: String, publish: @escaping @Sendable (String) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        text += delta
+        let now = Date()
+        let elapsed = now.timeIntervalSince(lastPublishAt)
+        guard elapsed >= publishInterval else {
+            scheduleTrailingFlushLocked(after: publishInterval - elapsed, publish: publish)
+            return
+        }
+        cancelPendingFlushLocked()
+        lastPublishAt = now
+        publish(text)
+    }
+
+    func reset() {
+        lock.lock()
+        defer { lock.unlock() }
+
+        cancelPendingFlushLocked()
+        text = ""
+        lastPublishAt = .distantPast
+    }
+
+    func finish(
+        finalText: String?,
+        publish: @escaping @Sendable (String) -> Void
+    ) {
+        lock.lock()
+        cancelPendingFlushLocked()
+        let bufferedText = text
+        let completedText: String
+        if let finalText, !finalText.isEmpty {
+            completedText = finalText
+        } else {
+            completedText = bufferedText
+        }
+        text = ""
+        lastPublishAt = .distantPast
+        lock.unlock()
+
+        guard !completedText.isEmpty else { return }
+        publish(completedText)
+    }
+
+    private func scheduleTrailingFlushLocked(
+        after delay: TimeInterval,
+        publish: @escaping @Sendable (String) -> Void
+    ) {
+        guard pendingFlushTask == nil else { return }
+        pendingFlushTask = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            self?.flushPendingText(publish: publish)
+        }
+    }
+
+    private func flushPendingText(publish: @Sendable (String) -> Void) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard !Task.isCancelled else { return }
+        pendingFlushTask = nil
+        guard !text.isEmpty else { return }
+        lastPublishAt = Date()
+        publish(text)
+    }
+
+    private func cancelPendingFlushLocked() {
+        pendingFlushTask?.cancel()
+        pendingFlushTask = nil
+    }
+}
+
 private struct OpenAIRealtimeTranscriptionSessionUpdateEvent: Encodable {
     let type = "session.update"
     let session: OpenAIRealtimeTranscriptionSession
@@ -486,11 +556,15 @@ private struct OpenAIRealtimeTranslationAudio: Encodable {
 }
 
 private struct OpenAIRealtimeTranslationAudioInput: Encodable {
+    let format: OpenAIRealtimeAudioFormat
     let transcription: OpenAIRealtimeTranslationInputTranscription
+    let turnDetection: OpenAIRealtimeTurnDetection
     let noiseReduction: OpenAIRealtimeNoiseReduction
 
     private enum CodingKeys: String, CodingKey {
+        case format
         case transcription
+        case turnDetection = "turn_detection"
         case noiseReduction = "noise_reduction"
     }
 }

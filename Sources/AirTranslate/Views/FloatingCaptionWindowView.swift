@@ -12,6 +12,12 @@ struct FloatingCaptionWindowView: View {
             }
             .padding(.horizontal, 28)
             .padding(.vertical, 18)
+            .background {
+                if hasVisibleCaptionText {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .fill(.black.opacity(0.72))
+                }
+            }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 420, idealWidth: 720, maxWidth: 960, minHeight: 90, idealHeight: preferredHeight, maxHeight: preferredHeight)
@@ -50,11 +56,12 @@ struct FloatingCaptionWindowView: View {
                     subtitleText(" ", font: session.floatingCaptionTextSize.primaryFont)
                         .opacity(0)
                 }
-            }
-            if sourceText.isEmpty && translationText.isEmpty && noticeText.isEmpty {
-                subtitleText(AppText.noFloatingCaptionsYet, font: session.floatingCaptionTextSize.primaryFont)
-            } else if sourceText.isEmpty && translationText.isEmpty {
+            } else if !translationText.isEmpty {
+                subtitleText(translationText, font: session.floatingCaptionTextSize.primaryFont)
+            } else if !noticeText.isEmpty {
                 noticeSubtitleText(noticeText)
+            } else {
+                subtitleText(AppText.noFloatingCaptionsYet, font: session.floatingCaptionTextSize.primaryFont)
             }
         case .translation:
             if !translationText.isEmpty {
@@ -77,6 +84,15 @@ struct FloatingCaptionWindowView: View {
 
     private var noticeText: String {
         session.floatingNoticeText ?? ""
+    }
+
+    private var hasVisibleCaptionText: Bool {
+        switch session.floatingCaptionDisplayMode {
+        case .original, .originalAndTranslation:
+            true
+        case .translation:
+            !translationText.isEmpty || !noticeText.isEmpty || sourceText.isEmpty
+        }
     }
 
     private var lineLimit: Int {

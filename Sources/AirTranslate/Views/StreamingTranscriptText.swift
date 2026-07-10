@@ -30,6 +30,8 @@ struct StreamingTranscriptText: View {
             }
             .onDisappear {
                 streamTask?.cancel()
+                streamTask = nil
+                settle(to: text)
             }
     }
 
@@ -43,7 +45,7 @@ struct StreamingTranscriptText: View {
     }
 
     private var baseText: some View {
-        Text(renderedText)
+        Text("\(Text(settledText))\(Text(appearingText).foregroundStyle(foregroundColor.opacity(appearingOpacity)))")
             .font(font)
             .foregroundStyle(foregroundColor)
             .lineLimit(lineLimit)
@@ -53,63 +55,48 @@ struct StreamingTranscriptText: View {
             .frame(maxWidth: .infinity, alignment: frameAlignment)
     }
 
-    private var renderedText: AttributedString {
-        var rendered = AttributedString(settledText)
-        var appearing = AttributedString(appearingText)
-        appearing.foregroundColor = foregroundColor.opacity(appearingOpacity)
-        rendered.append(appearing)
-        return rendered
-    }
-
     private var visibleText: String {
         settledText + appearingText
     }
 
     private func stream(to newText: String) {
         streamTask?.cancel()
-        let newTextLength = newText.utf16.count
+        let newTextLength = newText.count
+        let visibleText = visibleText
 
-        if !appearingText.isEmpty {
-            settledText += appearingText
-            appearingText = ""
-            appearingOpacity = 1
+        guard newText != visibleText else {
+            return
         }
 
         guard !newText.isEmpty else {
-            settledText = ""
-            appearingText = ""
+            settle(to: "")
             return
         }
 
         guard !reduceMotion else {
-            settledText = newText
+            settle(to: newText)
             return
         }
 
         guard newTextLength <= Self.maxAnimatedTextLength else {
-            settledText = newText
+            settle(to: newText)
             return
         }
 
-        let visibleText = visibleText
-        guard newText.hasPrefix(visibleText), newTextLength > visibleText.utf16.count else {
-            settledText = newText
-            appearingText = ""
-            appearingOpacity = 1
+        guard newText.hasPrefix(visibleText), newTextLength > visibleText.count else {
+            settle(to: newText)
             return
         }
 
         let remainingText = String(newText.dropFirst(visibleText.count))
-        let remainingTextLength = remainingText.utf16.count
-        guard remainingTextLength <= Self.maxAnimatedDeltaLength else {
-            settledText = newText
+        guard remainingText.count <= Self.maxAnimatedDeltaLength else {
+            settle(to: newText)
             return
         }
 
-        let chunkSize = remainingTextLength > 72 ? 8 : (remainingTextLength > 28 ? 6 : 4)
-        let delay = remainingTextLength > 72 ? 10_000_000 : (remainingTextLength > 28 ? 14_000_000 : 18_000_000)
-        let fadeDuration = remainingTextLength > 72 ? 0.08 : 0.12
-        let chunks = remainingText.chunkedForTranscriptStreaming(maxCharacters: chunkSize)
+        let chunks = StreamingChunkPolicy.chunks(for: remainingText)
+        let delay = StreamingChunkPolicy.chunkDelayNanoseconds(chunkCount: chunks.count)
+        let fadeDuration = Double(delay) / 1_000_000_000
 
         streamTask = Task { @MainActor in
             for chunk in chunks {
@@ -128,7 +115,11 @@ struct StreamingTranscriptText: View {
                     appearingOpacity = 1
                 }
 
-                try? await Task.sleep(nanoseconds: UInt64(delay))
+                try? await Task.sleep(nanoseconds: delay)
+            }
+
+            if Task.isCancelled {
+                return
             }
 
             if !appearingText.isEmpty {
@@ -138,18 +129,34 @@ struct StreamingTranscriptText: View {
             }
         }
     }
+
+    private func settle(to finalText: String) {
+        settledText = finalText
+        appearingText = ""
+        appearingOpacity = 1
+    }
 }
 
-private extension String {
-    func chunkedForTranscriptStreaming(maxCharacters: Int) -> [String] {
-        guard maxCharacters > 0 else { return [self] }
+enum StreamingChunkPolicy {
+    static let targetChunkCount = 14
+    static let minimumChunkCharacters = 4
+    static let maxChunkDelayNanoseconds: UInt64 = 18_000_000
+    static let totalAnimationBudgetNanoseconds: UInt64 = 200_000_000
+
+    static func chunks(for text: String) -> [String] {
+        guard !text.isEmpty else { return [] }
+
+        let maxCharacters = max(
+            minimumChunkCharacters,
+            (text.count + targetChunkCount - 1) / targetChunkCount
+        )
 
         var chunks: [String] = []
         var current = ""
 
-        for character in self {
+        for character in text {
             current.append(character)
-            if current.count >= maxCharacters || character.isWhitespace || character.isPunctuation {
+            if current.count >= maxCharacters {
                 chunks.append(current)
                 current = ""
             }
@@ -160,5 +167,10 @@ private extension String {
         }
 
         return chunks
+    }
+
+    static func chunkDelayNanoseconds(chunkCount: Int) -> UInt64 {
+        guard chunkCount > 0 else { return 0 }
+        return min(maxChunkDelayNanoseconds, totalAnimationBudgetNanoseconds / UInt64(chunkCount))
     }
 }

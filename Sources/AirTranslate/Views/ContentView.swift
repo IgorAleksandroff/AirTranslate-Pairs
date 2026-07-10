@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Bindable var session: TranslationSessionStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isLibraryPresented = false
     @State private var isFloatingCaptionVisible = FloatingCaptionWindowController.isOpen
 
@@ -32,7 +33,7 @@ struct ContentView: View {
                 .tint(session.isRunning || session.isStarting ? .red : .accentColor)
                 .help(captureButtonTitle)
                 .accessibilityLabel(captureButtonTitle)
-                .accessibilityValue(session.statusMessage)
+                .accessibilityValue(captureStateDescription)
 
                 Button {
                     togglePause()
@@ -88,8 +89,8 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: FloatingCaptionWindowController.visibilityDidChangeNotification)) { _ in
             syncFloatingCaptionVisibility()
         }
-        .animation(.spring(response: 0.26, dampingFraction: 0.84), value: session.toastSequence)
-        .animation(.easeOut(duration: 0.18), value: session.toastMessage)
+        .animation(reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.84), value: session.toastSequence)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: session.toastMessage)
         .confirmationDialog(
             AppText.autoDetectionLanguageChangeTitle,
             isPresented: autoDetectionLanguageChangeBinding,
@@ -117,6 +118,16 @@ struct ContentView: View {
 
     private var captureButtonTitle: String {
         session.isRunning || session.isStarting ? AppText.stop : AppText.start
+    }
+
+    private var captureStateDescription: String {
+        if session.isStarting {
+            return AppText.startingCapture(for: session.audioInputSource)
+        }
+        if session.isRunning {
+            return session.isPaused ? AppText.paused : AppText.listening
+        }
+        return AppText.ready
     }
 
     private var captureButtonSystemImage: String {

@@ -4,9 +4,11 @@ struct SettingsView: View {
     @Bindable var session: TranslationSessionStore
     @SceneStorage("AirTranslate.SettingsView.selectedCategory") private var selectedCategoryID = SettingsCategory.general.rawValue
     @State private var openAIAPIKey = ""
-    @State private var apiKeyFeedback: String?
+    @State private var openAIKeyFeedback: APIKeyFeedback?
+    @State private var isConfirmingOpenAIKeyRemoval = false
     @State private var geminiAPIKey = ""
-    @State private var geminiKeyFeedback: String?
+    @State private var geminiKeyFeedback: APIKeyFeedback?
+    @State private var isConfirmingGeminiKeyRemoval = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -28,7 +30,7 @@ struct SettingsView: View {
             .scrollIndicators(.hidden)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 900, height: 650)
+        .frame(minWidth: 900, maxWidth: .infinity, minHeight: 650, maxHeight: .infinity)
         .background(Color(nsColor: .windowBackgroundColor))
         .onAppear(perform: applyRequestedSettingsCategory)
         .onChange(of: session.requestedSettingsCategoryID) { _, _ in
@@ -100,6 +102,26 @@ struct SettingsView: View {
                 }
             }
 
+            if processingModeSelection.wrappedValue == .openAI {
+                SettingsControlRow(
+                    title: SettingsCopy.gptRealtimeModel,
+                    detail: SettingsCopy.gptRealtimeModelDetail,
+                    systemImage: "waveform.badge.magnifyingglass"
+                ) {
+                    Picker(SettingsCopy.gptRealtimeModel, selection: openAIRealtimeModelSelection) {
+                        ForEach(OpenAIRealtimeTranslationModel.liveTranslationCases) { model in
+                            Text(model.title).tag(model)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(minWidth: 260, idealWidth: 320, maxWidth: 360)
+                    .disabled(session.isRunning)
+                    .accessibilityLabel(SettingsCopy.gptRealtimeModel)
+                }
+
+                SettingsNoticeRow(text: SettingsCopy.openAIVoiceAgentModelNotice, systemImage: "info.circle")
+            }
+
             if processingModeSelection.wrappedValue == .gemini, !session.hasGeminiAPIKey {
                 SettingsNoticeActionRow(
                     text: AppText.geminiAPIKeyMissing,
@@ -133,16 +155,23 @@ struct SettingsView: View {
                 title: AppText.languages,
                 detail: SettingsCopy.languagePairDetail,
                 systemImage: "globe",
-                value: "\(session.sourceLanguage.localizedTitle) -> \(session.targetLanguage.localizedTitle)"
+                value: AppText.languageSummary(
+                    source: session.sourceLanguage.localizedTitle,
+                    target: session.targetLanguage.localizedTitle
+                )
             )
 
-            SettingsToggleRow(
+            SettingsValueRow(
                 title: AppText.autoDetectInput,
                 detail: SettingsCopy.autoDetectDetail,
                 systemImage: "sparkles",
-                isOn: $session.isAppleSourceAutoDetectionEnabled
+                value: AppText.localized(
+                    english: "Coming soon",
+                    korean: "지원 예정",
+                    japanese: "近日対応",
+                    chineseSimplified: "即将支持"
+                )
             )
-            .disabled(true)
         }
     }
 
@@ -157,6 +186,7 @@ struct SettingsView: View {
 
                     SecureField(AppText.openAIAPIKeyPlaceholder, text: $openAIAPIKey)
                         .textFieldStyle(.roundedBorder)
+                        .onSubmit(saveOpenAIAPIKey)
                         .accessibilityLabel(AppText.openAIAPIKey)
 
                     Button {
@@ -169,27 +199,36 @@ struct SettingsView: View {
                     .accessibilityLabel(AppText.saveOpenAIAPIKey)
 
                     Button {
-                        removeOpenAIAPIKey()
+                        isConfirmingOpenAIKeyRemoval = true
                     } label: {
                         Image(systemName: "trash")
                     }
                     .disabled(!session.hasOpenAIAPIKey)
                     .help(AppText.removeOpenAIAPIKey)
                     .accessibilityLabel(AppText.removeOpenAIAPIKey)
+                    .confirmationDialog(
+                        AppText.localized(
+                            english: "Remove the saved OpenAI API key from Keychain?",
+                            korean: "Keychain에 저장된 OpenAI API 키를 삭제할까요?",
+                            japanese: "Keychainに保存されたOpenAI APIキーを削除しますか？",
+                            chineseSimplified: "要从 Keychain 中删除已保存的 OpenAI API key 吗？"
+                        ),
+                        isPresented: $isConfirmingOpenAIKeyRemoval
+                    ) {
+                        Button(AppText.removeOpenAIAPIKey, role: .destructive) {
+                            removeOpenAIAPIKey()
+                        }
+                        Button(AppText.cancel, role: .cancel) {}
+                    }
                 }
 
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(session.hasOpenAIAPIKey ? Color.green : Color.orange)
-                        .frame(width: 7, height: 7)
-
-                    Text(apiKeyFeedback ?? (session.hasOpenAIAPIKey ? AppText.openAIAPIKeyConfigured : AppText.openAIAPIKeyNotConfigured))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(apiKeyFeedback == nil && !session.hasOpenAIAPIKey ? Color.orange : openAIStatusColor)
-                }
-                .padding(.leading, 34)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(apiKeyFeedback ?? (session.hasOpenAIAPIKey ? AppText.openAIAPIKeyConfigured : AppText.openAIAPIKeyNotConfigured))
+                APIKeyStatusRow(
+                    feedback: $openAIKeyFeedback,
+                    fallback: APIKeyFeedback(
+                        kind: session.hasOpenAIAPIKey ? .success : .warning,
+                        message: session.hasOpenAIAPIKey ? AppText.openAIAPIKeyConfigured : AppText.openAIAPIKeyNotConfigured
+                    )
+                )
 
                 Text(AppText.openAIAPIKeyDescription)
                     .font(.caption)
@@ -201,16 +240,23 @@ struct SettingsView: View {
             .padding(.vertical, 3)
 
             SettingsControlRow(
-                title: AppText.gptTranslationModel,
-                detail: SettingsCopy.gptTranslationDetail,
-                systemImage: "waveform.badge.magnifyingglass"
+                title: SettingsCopy.currentGPTRealtimeModel,
+                detail: SettingsCopy.currentGPTRealtimeModelDetail,
+                systemImage: "waveform"
             ) {
-                Text(OpenAIRealtimeTranslationModel.gptRealtimeTranslate.title)
+                Text(session.openAITranslationModel.isEnabled ? session.openAITranslationModel.title : OpenAIRealtimeTranslationModel.gptRealtimeTranslate.title)
                     .font(.callout.weight(.semibold))
-                    .foregroundStyle(selectedProcessingMode == .openAI ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(Color.secondary)
                     .lineLimit(1)
-                    .minimumScaleFactor(0.82)
+                    .minimumScaleFactor(0.78)
             }
+
+            SettingsValueRow(
+                title: SettingsCopy.openAIVoiceAgentModels,
+                detail: SettingsCopy.openAIVoiceAgentModelsDetail,
+                systemImage: "person.wave.2",
+                value: OpenAIRealtimeTranslationModel.voiceAgentCases.map(\.rawValue).joined(separator: ", ")
+            )
         }
     }
 
@@ -507,6 +553,7 @@ struct SettingsView: View {
 
                     SecureField(AppText.geminiAPIKeyPlaceholder, text: $geminiAPIKey)
                         .textFieldStyle(.roundedBorder)
+                        .onSubmit(saveGeminiAPIKey)
                         .accessibilityLabel(AppText.geminiAPIKey)
 
                     Button {
@@ -519,27 +566,36 @@ struct SettingsView: View {
                     .accessibilityLabel(AppText.saveGeminiAPIKey)
 
                     Button {
-                        removeGeminiAPIKey()
+                        isConfirmingGeminiKeyRemoval = true
                     } label: {
                         Image(systemName: "trash")
                     }
                     .disabled(!session.hasGeminiAPIKey)
                     .help(AppText.removeGeminiAPIKey)
                     .accessibilityLabel(AppText.removeGeminiAPIKey)
+                    .confirmationDialog(
+                        AppText.localized(
+                            english: "Remove the saved Gemini API key from Keychain?",
+                            korean: "Keychain에 저장된 Gemini API 키를 삭제할까요?",
+                            japanese: "Keychainに保存されたGemini APIキーを削除しますか？",
+                            chineseSimplified: "要从 Keychain 中删除已保存的 Gemini API key 吗？"
+                        ),
+                        isPresented: $isConfirmingGeminiKeyRemoval
+                    ) {
+                        Button(AppText.removeGeminiAPIKey, role: .destructive) {
+                            removeGeminiAPIKey()
+                        }
+                        Button(AppText.cancel, role: .cancel) {}
+                    }
                 }
 
-                HStack(spacing: 8) {
-                    Circle()
-                        .fill(session.hasGeminiAPIKey ? Color.green : Color.orange)
-                        .frame(width: 7, height: 7)
-
-                    Text(geminiKeyFeedback ?? (session.hasGeminiAPIKey ? AppText.geminiAPIKeyConfigured : AppText.geminiAPIKeyNotConfigured))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(geminiKeyFeedback == nil && !session.hasGeminiAPIKey ? Color.orange : geminiStatusColor)
-                }
-                .padding(.leading, 34)
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel(geminiKeyFeedback ?? (session.hasGeminiAPIKey ? AppText.geminiAPIKeyConfigured : AppText.geminiAPIKeyNotConfigured))
+                APIKeyStatusRow(
+                    feedback: $geminiKeyFeedback,
+                    fallback: APIKeyFeedback(
+                        kind: session.hasGeminiAPIKey ? .success : .warning,
+                        message: session.hasGeminiAPIKey ? AppText.geminiAPIKeyConfigured : AppText.geminiAPIKeyNotConfigured
+                    )
+                )
 
                 Text(AppText.geminiAPIKeyDescription)
                     .font(.caption)
@@ -611,55 +667,78 @@ struct SettingsView: View {
         }
     }
 
-    private var openAIStatusColor: Color {
-        guard let apiKeyFeedback else {
-            return session.hasOpenAIAPIKey ? .green : .orange
+    private var openAIRealtimeModelSelection: Binding<OpenAIRealtimeTranslationModel> {
+        Binding {
+            session.openAITranslationModel.isSupportedLiveTranslationModel ? session.openAITranslationModel : .gptRealtimeTranslate
+        } set: { model in
+            guard !session.isRunning else { return }
+            session.useGPTRealtimeMode(model: model)
         }
-
-        if apiKeyFeedback == AppText.openAIAPIKeySaved {
-            return .green
-        }
-        if apiKeyFeedback == AppText.openAIAPIKeyRemoved {
-            return .orange
-        }
-        return .red
     }
 
-    private var geminiStatusColor: Color {
-        guard let geminiKeyFeedback else {
-            return session.hasGeminiAPIKey ? .green : .orange
-        }
-
-        if geminiKeyFeedback == AppText.geminiAPIKeySaved {
-            return .green
-        }
-        if geminiKeyFeedback == AppText.geminiAPIKeyRemoved {
-            return .orange
-        }
-        return .red
-    }
-
+    // Key operations run against the Keychain store directly so failures surface as
+    // typed errors; the follow-up session call syncs published state and availability.
     private func saveOpenAIAPIKey() {
-        session.saveOpenAIAPIKey(openAIAPIKey)
-        apiKeyFeedback = session.statusMessage
+        let trimmedKey = openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else {
+            openAIKeyFeedback = APIKeyFeedback(kind: .error, message: AppText.openAIAPIKeyEmpty)
+            return
+        }
+
+        do {
+            try OpenAIAPIKeyStore.saveAPIKey(trimmedKey)
+        } catch {
+            openAIKeyFeedback = APIKeyFeedback(kind: .error, message: error.localizedDescription)
+            return
+        }
+
+        session.saveOpenAIAPIKey(trimmedKey)
+        openAIKeyFeedback = APIKeyFeedback(kind: .success, message: AppText.openAIAPIKeySaved)
         openAIAPIKey = ""
     }
 
     private func removeOpenAIAPIKey() {
+        do {
+            try OpenAIAPIKeyStore.deleteAPIKey()
+        } catch {
+            openAIKeyFeedback = APIKeyFeedback(kind: .error, message: error.localizedDescription)
+            return
+        }
+
         session.removeOpenAIAPIKey()
-        apiKeyFeedback = session.statusMessage
+        openAIKeyFeedback = APIKeyFeedback(kind: .warning, message: AppText.openAIAPIKeyRemoved)
         openAIAPIKey = ""
     }
 
     private func saveGeminiAPIKey() {
-        session.saveGeminiAPIKey(geminiAPIKey)
-        geminiKeyFeedback = session.statusMessage
+        let trimmedKey = geminiAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedKey.isEmpty else {
+            geminiKeyFeedback = APIKeyFeedback(kind: .error, message: AppText.geminiAPIKeyEmpty)
+            return
+        }
+
+        do {
+            try GeminiAPIKeyStore.saveAPIKey(trimmedKey)
+        } catch {
+            geminiKeyFeedback = APIKeyFeedback(kind: .error, message: error.localizedDescription)
+            return
+        }
+
+        session.saveGeminiAPIKey(trimmedKey)
+        geminiKeyFeedback = APIKeyFeedback(kind: .success, message: AppText.geminiAPIKeySaved)
         geminiAPIKey = ""
     }
 
     private func removeGeminiAPIKey() {
+        do {
+            try GeminiAPIKeyStore.deleteAPIKey()
+        } catch {
+            geminiKeyFeedback = APIKeyFeedback(kind: .error, message: error.localizedDescription)
+            return
+        }
+
         session.removeGeminiAPIKey()
-        geminiKeyFeedback = session.statusMessage
+        geminiKeyFeedback = APIKeyFeedback(kind: .warning, message: AppText.geminiAPIKeyRemoved)
         geminiAPIKey = ""
     }
 
@@ -670,6 +749,58 @@ struct SettingsView: View {
 
         selectedCategory.wrappedValue = category
         session.requestedSettingsCategoryID = nil
+    }
+}
+
+private struct APIKeyFeedback: Equatable {
+    enum Kind: Equatable {
+        case success
+        case warning
+        case error
+    }
+
+    let kind: Kind
+    let message: String
+    private let token = UUID()
+
+    var color: Color {
+        switch kind {
+        case .success:
+            .green
+        case .warning:
+            .orange
+        case .error:
+            .red
+        }
+    }
+}
+
+private struct APIKeyStatusRow: View {
+    @Binding var feedback: APIKeyFeedback?
+    let fallback: APIKeyFeedback
+
+    private var current: APIKeyFeedback {
+        feedback ?? fallback
+    }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(current.color)
+                .frame(width: 7, height: 7)
+
+            Text(current.message)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(current.color)
+        }
+        .padding(.leading, 34)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(current.message)
+        .task(id: feedback) {
+            guard feedback != nil else { return }
+            guard (try? await Task.sleep(for: .seconds(6))) != nil else { return }
+            feedback = nil
+        }
     }
 }
 
@@ -685,9 +816,9 @@ private enum SettingsProcessingMode: String, CaseIterable, Identifiable {
         case .apple:
             AppText.appleProcessingMode
         case .openAI:
-            AppText.localized(english: "GPT Realtime", korean: "GPT Realtime")
+            "GPT Realtime"
         case .gemini:
-            AppText.localized(english: "Gemini Live", korean: "Gemini Live")
+            "Gemini Live"
         }
     }
 }
@@ -860,9 +991,33 @@ private enum SettingsCopy {
         english: "Transcript cleanup is disabled while OpenAI Realtime is active.",
         korean: "OpenAI Realtime이 켜져 있을 때는 기록 다듬기를 사용할 수 없습니다."
     )
-    static let gptTranslationDetail = AppText.localized(
-        english: "Use gpt-realtime-translate for direct audio-to-live-translation sessions.",
-        korean: "gpt-realtime-translate로 오디오를 직접 실시간 번역합니다."
+    static let gptRealtimeModel = AppText.localized(
+        english: "GPT Realtime Model",
+        korean: "GPT Realtime 모델"
+    )
+    static let gptRealtimeModelDetail = AppText.localized(
+        english: "Choose the translation-endpoint model used by GPT mode.",
+        korean: "GPT 모드에서 사용할 번역 엔드포인트 모델을 선택합니다."
+    )
+    static let openAIVoiceAgentModelNotice = AppText.localized(
+        english: "gpt-realtime-2.1 and 2.1-mini are voice-agent models for /v1/realtime. AirTranslate live interpretation uses gpt-realtime-translate on the translation endpoint.",
+        korean: "gpt-realtime-2.1과 2.1-mini는 /v1/realtime용 보이스 에이전트 모델입니다. AirTranslate 실시간 통역은 번역 전용 엔드포인트의 gpt-realtime-translate를 사용합니다."
+    )
+    static let currentGPTRealtimeModel = AppText.localized(
+        english: "Current GPT Realtime model",
+        korean: "현재 GPT Realtime 모델"
+    )
+    static let currentGPTRealtimeModelDetail = AppText.localized(
+        english: "Change this from General after selecting GPT Realtime.",
+        korean: "GPT Realtime을 선택한 뒤 일반 설정에서 변경합니다."
+    )
+    static let openAIVoiceAgentModels = AppText.localized(
+        english: "Voice-agent models",
+        korean: "보이스 에이전트 모델"
+    )
+    static let openAIVoiceAgentModelsDetail = AppText.localized(
+        english: "Documented OpenAI Realtime voice-agent models. They are not used for AirTranslate's live interpreter path yet.",
+        korean: "공식 문서에 등록된 OpenAI Realtime 보이스 에이전트 모델입니다. 아직 AirTranslate의 실시간 통역 경로에는 사용하지 않습니다."
     )
     static let geminiTranslationDetail = AppText.localized(
         english: "Use Gemini 3.5 Live Translate for direct audio-to-live-translation sessions.",
@@ -923,8 +1078,7 @@ private enum SettingsCopy {
         english: "Apple mode runs locally. OpenAI and Gemini Live are used only after you provide a matching API key and select that mode.",
         korean: "Apple 모드는 로컬에서 실행됩니다. OpenAI와 Gemini Live는 해당 API 키를 저장하고 해당 모드를 선택했을 때만 사용됩니다."
     )
-    static let keychain = AppText.localized(english: "Keychain", korean: "Keychain")
-    static let selected = AppText.localized(english: "Selected", korean: "선택됨")
+    static let keychain = "Keychain"
     static let sidebarHint = AppText.localized(
         english: "Opens this settings category.",
         korean: "이 설정 카테고리를 엽니다."
@@ -935,55 +1089,30 @@ private struct SettingsSidebar: View {
     @Binding var selection: SettingsCategory
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        List(selection: $selection) {
             ForEach(SettingsCategory.allCases) { category in
-                Button {
-                    selection = category
-                } label: {
-                    HStack(spacing: 14) {
-                        Image(systemName: category.systemImage)
-                            .font(.title3.weight(.medium))
-                            .foregroundStyle(selection == category ? Color.primary : Color.secondary)
-                            .frame(width: 28, height: 28)
+                HStack(spacing: 14) {
+                    Image(systemName: category.systemImage)
+                        .font(.title3.weight(.medium))
+                        .foregroundStyle(selection == category ? Color.primary : Color.secondary)
+                        .frame(width: 28, height: 28)
 
-                        Text(category.title)
-                            .font(.body.weight(.semibold))
-                            .foregroundStyle(selection == category ? Color.primary : Color.secondary)
-                            .lineLimit(1)
+                    Text(category.title)
+                        .font(.body.weight(.semibold))
+                        .foregroundStyle(selection == category ? Color.primary : Color.secondary)
+                        .lineLimit(1)
 
-                        Spacer(minLength: 0)
-                    }
-                    .padding(.horizontal, 16)
-                    .frame(height: 48)
-                    .background {
-                        if selection == category {
-                            RoundedRectangle(cornerRadius: 8, style: .continuous)
-                                .fill(Color.primary.opacity(0.10))
-                        }
-                    }
-                    .overlay(alignment: .leading) {
-                        if selection == category {
-                            RoundedRectangle(cornerRadius: 3, style: .continuous)
-                                .fill(Color.accentColor)
-                                .frame(width: 4, height: 40)
-                                .padding(.leading, 2)
-                        }
-                    }
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.plain)
+                .padding(.vertical, 8)
+                .tag(category)
+                .listRowSeparator(.hidden)
                 .accessibilityLabel(category.title)
-                .accessibilityValue(selection == category ? SettingsCopy.selected : "")
                 .accessibilityHint(SettingsCopy.sidebarHint)
-                .accessibilityAddTraits(selection == category ? .isSelected : [])
-                .focusEffectDisabled()
-                .focusable(false)
             }
-
-            Spacer(minLength: 0)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 28)
-        .frame(maxHeight: .infinity, alignment: .top)
+        .listStyle(.sidebar)
+        .scrollContentBackground(.hidden)
         .background(Color.primary.opacity(0.035))
     }
 }

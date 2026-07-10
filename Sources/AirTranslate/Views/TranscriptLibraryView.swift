@@ -11,6 +11,7 @@ struct TranscriptLibraryView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var focusedDraftEditor: DraftEditorField?
     @State private var draftEditorTextViews: [DraftEditorField: NSTextView] = [:]
+    @State private var isDeleteSelectedConfirmationPresented = false
     @State private var isDeleteAllConfirmationPresented = false
     @State private var isCopyFeedbackVisible = false
     @State private var copyFeedbackToken = 0
@@ -27,13 +28,22 @@ struct TranscriptLibraryView: View {
         }
         .frame(width: 760, height: 500)
         .confirmationDialog(
+            AppText.deleteSavedTranscriptConfirmation,
+            isPresented: $isDeleteSelectedConfirmationPresented
+        ) {
+            Button(AppText.deleteSavedTranscript, role: .destructive) {
+                session.deleteSelectedTranscript()
+            }
+            Button(AppText.cancel, role: .cancel) {}
+        }
+        .confirmationDialog(
             AppText.deleteAllSavedTranscriptsConfirmation,
             isPresented: $isDeleteAllConfirmationPresented
         ) {
             Button(AppText.deleteAllSavedTranscripts, role: .destructive) {
                 session.deleteAllSavedTranscripts()
             }
-            Button(AppText.close, role: .cancel) {}
+            Button(AppText.cancel, role: .cancel) {}
         }
         .onAppear {
             ensureSelection()
@@ -201,7 +211,7 @@ struct TranscriptLibraryView: View {
                     Spacer(minLength: 0)
 
                     Button(role: .destructive) {
-                        session.deleteSelectedTranscript()
+                        isDeleteSelectedConfirmationPresented = true
                     } label: {
                         Label(AppText.deleteSavedTranscript, systemImage: "trash")
                     }

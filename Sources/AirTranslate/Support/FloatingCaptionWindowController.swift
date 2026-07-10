@@ -22,16 +22,17 @@ final class FloatingCaptionWindowController: NSObject, NSWindowDelegate {
     }
 
     private static let shared = FloatingCaptionWindowController()
+    private static let frameDefaultsKey = "floatingCaptionWindowFrame"
 
     private var window: NSPanel?
 
     private func open(session: TranslationSessionStore) {
-        closeOrphanFloatingWindows()
-
+        let isFirstOpen = window == nil
         let panel = window ?? makeWindow(session: session)
-        panel.contentView = NSHostingView(rootView: FloatingCaptionWindowView(session: session))
         configure(panel, session: session)
-        if window == nil {
+        let screenFrames = NSScreen.screens.map(\.visibleFrame)
+        let needsPlacement = isFirstOpen || !Self.frameIsReasonablyVisible(panel.frame, within: screenFrames)
+        if needsPlacement, !restorePersistedFrame(panel) {
             positionForFirstOpen(panel)
         }
         window = panel
@@ -40,15 +41,27 @@ final class FloatingCaptionWindowController: NSObject, NSWindowDelegate {
     }
 
     private func close() {
-        window?.close()
-        window = nil
+        guard let panel = window else { return }
+        persistFrame(of: panel)
+        panel.orderOut(nil)
         notifyVisibilityChanged()
     }
 
     func windowWillClose(_ notification: Notification) {
         guard notification.object as? NSWindow === window else { return }
+        if let panel = window {
+            persistFrame(of: panel)
+        }
         window = nil
         Self.notifyVisibilityChanged()
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        persistFrameIfCurrent(notification)
+    }
+
+    func windowDidResize(_ notification: Notification) {
+        persistFrameIfCurrent(notification)
     }
 
     private func makeWindow(session: TranslationSessionStore) -> NSPanel {
@@ -89,12 +102,36 @@ final class FloatingCaptionWindowController: NSObject, NSWindowDelegate {
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
-    private func closeOrphanFloatingWindows() {
-        for candidate in NSApp.windows where candidate !== window {
-            if candidate.identifier?.rawValue == AirTranslateWindowID.floatingCaptions
-                || candidate.title == AppText.floatingCaptions {
-                candidate.close()
-            }
+    private func persistFrameIfCurrent(_ notification: Notification) {
+        guard let panel = notification.object as? NSWindow, panel === window, panel.isVisible else { return }
+        persistFrame(of: panel)
+    }
+
+    private func persistFrame(of panel: NSWindow) {
+        UserDefaults.standard.set(NSStringFromRect(panel.frame), forKey: Self.frameDefaultsKey)
+    }
+
+    private func restorePersistedFrame(_ panel: NSPanel) -> Bool {
+        guard let frameString = UserDefaults.standard.string(forKey: Self.frameDefaultsKey) else {
+            return false
+        }
+
+        let frame = NSRectFromString(frameString)
+        let screenFrames = NSScreen.screens.map(\.visibleFrame)
+        guard Self.frameIsReasonablyVisible(frame, within: screenFrames) else {
+            return false
+        }
+
+        panel.setFrame(frame, display: false)
+        return true
+    }
+
+    nonisolated static func frameIsReasonablyVisible(_ frame: NSRect, within screenVisibleFrames: [NSRect]) -> Bool {
+        guard frame.width > 0, frame.height > 0 else { return false }
+
+        return screenVisibleFrames.contains { visibleFrame in
+            let intersection = visibleFrame.intersection(frame)
+            return intersection.width >= 160 && intersection.height >= 60
         }
     }
 

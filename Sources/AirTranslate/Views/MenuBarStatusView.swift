@@ -3,6 +3,7 @@ import SwiftUI
 struct MenuBarStatusView: View {
     @Bindable var session: TranslationSessionStore
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @State private var isFloatingCaptionVisible = FloatingCaptionWindowController.isOpen
 
     var body: some View {
@@ -18,6 +19,10 @@ struct MenuBarStatusView: View {
             Divider()
 
             captionFormatControls
+
+            Divider()
+
+            appControls
         }
         .padding(16)
         .frame(width: 360)
@@ -59,30 +64,18 @@ struct MenuBarStatusView: View {
             } label: {
                 IconPanelButtonLabel(
                     systemImage: isFloatingCaptionVisible ? "captions.bubble.fill" : "captions.bubble",
-                    title: AppText.localized(english: "View", korean: "보기", japanese: "表示", chineseSimplified: "显示"),
+                    title: isFloatingCaptionVisible
+                        ? AppText.localized(english: "Hide", korean: "숨김", japanese: "非表示", chineseSimplified: "隐藏")
+                        : AppText.localized(english: "Show", korean: "보기", japanese: "表示", chineseSimplified: "显示"),
                     subtitle: isFloatingCaptionVisible ? AppText.floatingCaptionPowerOn : AppText.floatingCaptionPowerOff,
                     accentColor: isFloatingCaptionVisible ? .green : .secondary,
                     isSelected: isFloatingCaptionVisible
                 )
             }
             .buttonStyle(.plain)
-            .help(AppText.showFloatingCaptions)
-            .accessibilityLabel(AppText.showFloatingCaptions)
+            .help(isFloatingCaptionVisible ? AppText.hideFloatingCaptions : AppText.showFloatingCaptions)
+            .accessibilityLabel(isFloatingCaptionVisible ? AppText.hideFloatingCaptions : AppText.showFloatingCaptions)
             .accessibilityValue(isFloatingCaptionVisible ? AppText.floatingCaptionPowerOn : AppText.floatingCaptionPowerOff)
-
-            Button {
-                FloatingCaptionWindowController.close()
-                syncFloatingCaptionVisibility()
-            } label: {
-                IconPanelButtonLabel(
-                    systemImage: "eye.slash",
-                    title: AppText.localized(english: "Hide", korean: "숨김", japanese: "非表示", chineseSimplified: "隐藏"),
-                    subtitle: AppText.localized(english: "Close", korean: "닫기", japanese: "閉じる", chineseSimplified: "关闭"),
-                    accentColor: .secondary
-                )
-            }
-            .buttonStyle(.plain)
-            .help(AppText.hideFloatingCaptions)
 
             Button {
                 openWindow(id: AirTranslateWindowID.main)
@@ -197,6 +190,39 @@ struct MenuBarStatusView: View {
                 .buttonStyle(.plain)
                 .help(AppText.floatingLineCount)
             }
+        }
+    }
+
+    private var appControls: some View {
+        HStack(spacing: 12) {
+            Button {
+                NSApp.activate(ignoringOtherApps: true)
+                openSettings()
+            } label: {
+                Label(
+                    AppText.localized(english: "Settings", korean: "설정", japanese: "設定", chineseSimplified: "设置"),
+                    systemImage: "gearshape"
+                )
+                .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help(AppText.localized(english: "Open Settings", korean: "설정 열기", japanese: "設定を開く", chineseSimplified: "打开设置"))
+
+            Spacer(minLength: 0)
+
+            Button {
+                NSApp.terminate(nil)
+            } label: {
+                Label(
+                    AppText.localized(english: "Quit", korean: "종료", japanese: "終了", chineseSimplified: "退出"),
+                    systemImage: "power"
+                )
+                .font(.caption.weight(.semibold))
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .help(AppText.localized(english: "Quit AirTranslate", korean: "AirTranslate 종료", japanese: "AirTranslateを終了", chineseSimplified: "退出 AirTranslate"))
         }
     }
 

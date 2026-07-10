@@ -96,6 +96,16 @@ enum OpenAIRealtimeTranscriptionModel: String, CaseIterable, Identifiable {
 enum OpenAIRealtimeTranslationModel: String, CaseIterable, Identifiable {
     case off
     case gptRealtimeTranslate = "gpt-realtime-translate"
+    case gptRealtime21 = "gpt-realtime-2.1"
+    case gptRealtime21Mini = "gpt-realtime-2.1-mini"
+
+    static var liveTranslationCases: [OpenAIRealtimeTranslationModel] {
+        [.gptRealtimeTranslate]
+    }
+
+    static var voiceAgentCases: [OpenAIRealtimeTranslationModel] {
+        [.gptRealtime21, .gptRealtime21Mini]
+    }
 
     var id: String { rawValue }
 
@@ -105,10 +115,24 @@ enum OpenAIRealtimeTranslationModel: String, CaseIterable, Identifiable {
             AppText.localized(english: "Use Apple Translation", korean: "Apple Translation 사용", japanese: "Apple Translationを使用", chineseSimplified: "使用 Apple Translation")
         case .gptRealtimeTranslate:
             AppText.localized(
-                english: "gpt-realtime-translate · live translation",
-                korean: "gpt-realtime-translate · 실시간 번역만",
+                english: "gpt-realtime-translate · translation-only",
+                korean: "gpt-realtime-translate · 번역 전용",
                 japanese: "gpt-realtime-translate · Live翻訳",
                 chineseSimplified: "gpt-realtime-translate · 实时翻译"
+            )
+        case .gptRealtime21:
+            AppText.localized(
+                english: "gpt-realtime-2.1 · voice agent",
+                korean: "gpt-realtime-2.1 · 보이스 에이전트",
+                japanese: "gpt-realtime-2.1 · Voice agent",
+                chineseSimplified: "gpt-realtime-2.1 · 语音代理"
+            )
+        case .gptRealtime21Mini:
+            AppText.localized(
+                english: "gpt-realtime-2.1-mini · voice agent",
+                korean: "gpt-realtime-2.1-mini · 보이스 에이전트",
+                japanese: "gpt-realtime-2.1-mini · Voice agent",
+                chineseSimplified: "gpt-realtime-2.1-mini · 语音代理"
             )
         }
     }
@@ -118,15 +142,19 @@ enum OpenAIRealtimeTranslationModel: String, CaseIterable, Identifiable {
     }
 
     var usesRealtimeAudioTranslation: Bool {
-        self != .off
+        self == .gptRealtimeTranslate
+    }
+
+    var isSupportedLiveTranslationModel: Bool {
+        self == .gptRealtimeTranslate
     }
 
     var apiModelID: String {
         switch self {
         case .off:
             ""
-        case .gptRealtimeTranslate:
-            "gpt-realtime-translate"
+        case .gptRealtimeTranslate, .gptRealtime21, .gptRealtime21Mini:
+            rawValue
         }
     }
 }

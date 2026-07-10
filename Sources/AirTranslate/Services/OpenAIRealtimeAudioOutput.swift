@@ -6,9 +6,11 @@ final class OpenAIRealtimeAudioOutput: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let player = AVAudioPlayerNode()
     private let translatedSampleGain: Float = 1.6
+    private let maximumBacklogSeconds: Double = 3
     private var outputVolume: Float = 1
     private var format: AVAudioFormat?
     private var isConfigured = false
+    private var scheduledFrames: AVAudioFramePosition = 0
 
     func setVolume(_ volume: Double) {
         queue.async { [weak self] in
@@ -30,6 +32,7 @@ final class OpenAIRealtimeAudioOutput: @unchecked Sendable {
             guard let self else { return }
             player.stop()
             engine.stop()
+            scheduledFrames = 0
         }
     }
 
@@ -61,13 +64,42 @@ final class OpenAIRealtimeAudioOutput: @unchecked Sendable {
             if !engine.isRunning {
                 try engine.start()
             }
+            discardBacklogIfNeeded(sampleRate: sampleRate)
+            scheduledFrames += AVAudioFramePosition(buffer.frameLength)
             player.scheduleBuffer(buffer, completionHandler: nil)
             if !player.isPlaying {
                 player.play()
             }
         } catch {
+            player.stop()
             engine.stop()
+            scheduledFrames = 0
         }
+    }
+
+    private func discardBacklogIfNeeded(sampleRate: Double) {
+        guard player.isPlaying,
+              let nodeTime = player.lastRenderTime,
+              let playerTime = player.playerTime(forNodeTime: nodeTime),
+              playerTime.isSampleTimeValid
+        else {
+            return
+        }
+
+        let playedFrames = max(0, playerTime.sampleTime)
+        if scheduledFrames <= playedFrames {
+            // Playback caught up with the queue (underrun); realign the accounting.
+            scheduledFrames = playedFrames
+            return
+        }
+
+        let backlogSeconds = Double(scheduledFrames - playedFrames) / sampleRate
+        guard backlogSeconds > maximumBacklogSeconds else { return }
+
+        // Live interpretation favors the newest audio: drop the stale queue and
+        // restart playback from the incoming chunk.
+        player.stop()
+        scheduledFrames = 0
     }
 
     private func configuredFormat(sampleRate: Double) -> AVAudioFormat? {
@@ -79,6 +111,7 @@ final class OpenAIRealtimeAudioOutput: @unchecked Sendable {
             player.stop()
             engine.stop()
             engine.disconnectNodeOutput(player)
+            scheduledFrames = 0
         } else {
             engine.attach(player)
             isConfigured = true

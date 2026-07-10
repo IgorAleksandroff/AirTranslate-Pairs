@@ -303,15 +303,9 @@ enum AppText {
         japanese: "文字起こし",
         chineseSimplified: "转写"
     )
-    static let gptTranslationModel = localized(
-        english: "Live Translation Model",
-        korean: "실시간 번역 모델",
-        japanese: "Live翻訳モデル",
-        chineseSimplified: "实时翻译模型"
-    )
     static let gptModelsDescription = localized(
-        english: "GPT mode streams audio directly to OpenAI Realtime Translation and shows the returned translated stream.",
-        korean: "GPT 모드는 오디오를 OpenAI Realtime Translation으로 직접 스트리밍하고 반환된 실시간 번역 흐름을 표시합니다."
+        english: "GPT mode streams audio through OpenAI Realtime Translation and shows the returned translated stream.",
+        korean: "GPT 모드는 오디오를 OpenAI Realtime Translation으로 스트리밍하고 반환된 실시간 번역 흐름을 표시합니다."
     )
     static let geminiModelsDescription = localized(
         english: "Gemini Live Translate streams audio directly to Gemini and shows the input and translated transcripts returned by the live session.",
@@ -537,6 +531,12 @@ enum AppText {
     )
     static let transcriptText = localized(english: "Transcript Text", korean: "기록 텍스트")
     static let deleteSavedTranscript = localized(english: "Delete Transcript", korean: "기록 삭제")
+    static let deleteSavedTranscriptConfirmation = localized(
+        english: "Delete this saved transcript? This cannot be undone.",
+        korean: "이 저장 기록을 삭제할까요? 이 작업은 되돌릴 수 없습니다.",
+        japanese: "この保存済み文字起こしを削除しますか？この操作は取り消せません。",
+        chineseSimplified: "要删除这份已保存的转写记录吗？此操作无法撤销。"
+    )
     static let translation = localized(english: "Translation", korean: "번역")
     static let translationDescription = localized(
         english: "Translated output aligned to the same transcript flow.",
@@ -782,6 +782,10 @@ enum AppText {
     static let geminiInvalidResponse = localized(
         english: "Gemini returned an invalid response.",
         korean: "Gemini가 올바르지 않은 응답을 반환했습니다."
+    )
+    static let geminiConnectionFailed = localized(
+        english: "Gemini Live connection failed. Check your network and API key, then try again.",
+        korean: "Gemini Live 연결에 실패했습니다. 네트워크와 API 키를 확인한 뒤 다시 시도하세요."
     )
 
     static let translationCancelled = localized(
