@@ -47,6 +47,17 @@ AirTranslate 可以捕获 Mac 正在播放的音频，实时转写并翻译，�
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
+## 1.4.0 主要更新
+
+- **长时间运行响应性:** Apple 默认模式会自动合并超长记录更新，在 UI 主线程之外准备大型翻译输入，并使用容量受限的 LRU 翻译缓存。
+- **更安全的记录连续性:** 捕获期间每30秒更新同一组记录文件，并在暂停、停止或退出应用时保存仍在等待的最后内容。
+- **降低 API 模式延迟:** Gemini Live 使用明确的语音活动检测和受限的连接前音频缓冲；OpenAI 文本翻译支持部分结果流式返回、超时和重试。
+- **限制译文语音积压:** 过时的实时或合成语音会被丢弃或加速，避免持续落后于字幕。
+- **更清晰的 macOS 操作:** 以文字显示正在聆听、已暂停和已保存状态；`Command-Return` 用于开始/停止，`Shift-Command-Space` 用于暂停/继续。
+- **辅助功能与窗口稳定性:** 改进 Reduce Motion、记录区域标签、键盘操作，以及显示器变化后的悬浮字幕窗口恢复。
+
+完整内容请参阅 [AirTranslate 1.4.0 发布说明](https://github.com/himomohi/AirTranslate/releases/tag/v1.4.0)。
+
 ## 核心功能
 
 - 实时捕获 Mac 系统音频
