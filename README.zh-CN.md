@@ -47,16 +47,16 @@ AirTranslate 可以捕获 Mac 正在播放的音频，实时转写并翻译，�
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
-## 1.4.0 主要更新
+## 1.4.1 主要更新
 
-- **长时间运行响应性:** Apple 默认模式会自动合并超长记录更新，在 UI 主线程之外准备大型翻译输入，并使用容量受限的 LRU 翻译缓存。
-- **更安全的记录连续性:** 捕获期间每30秒更新同一组记录文件，并在暂停、停止或退出应用时保存仍在等待的最后内容。
-- **降低 API 模式延迟:** Gemini Live 使用明确的语音活动检测和受限的连接前音频缓冲；OpenAI 文本翻译支持部分结果流式返回、超时和重试。
-- **限制译文语音积压:** 过时的实时或合成语音会被丢弃或加速，避免持续落后于字幕。
-- **更清晰的 macOS 操作:** 以文字显示正在聆听、已暂停和已保存状态；`Command-Return` 用于开始/停止，`Shift-Command-Space` 用于暂停/继续。
-- **辅助功能与窗口稳定性:** 改进 Reduce Motion、记录区域标签、键盘操作，以及显示器变化后的悬浮字幕窗口恢复。
+- **更稳定的译文语音:** Apple 默认模式会等流式译文到达稳定句子边界后再朗读。
+- **最终文本仍会朗读:** 没有标点的最终译文会在翻译请求完成时立即语音输出。
+- **减少重复尾句:** 短暂改写后恢复的句尾、近似重复的最终修订，以及短重复后缀不会再次朗读。
+- **更干净的配音切换:** 启用译文语音时，不会重新朗读已经显示在屏幕上的译文。
+- **保留合理重复:** 短暂防重放窗口过后，真实重复出现的短语仍可在同一会话中再次朗读。
+- **聚焦回归测试:** 译文语音进度逻辑由专门的 AirTranslateCore 测试覆盖。
 
-完整内容请参阅 [AirTranslate 1.4.0 发布说明](https://github.com/himomohi/AirTranslate/releases/tag/v1.4.0)。
+完整内容请参阅 [AirTranslate 1.4.1 发布说明](https://github.com/himomohi/AirTranslate/releases/tag/v1.4.1)。
 
 ## 核心功能
 
@@ -133,7 +133,7 @@ AirTranslate 只请求捕获和转写流程需要的权限。
 最新开源构建可在 [GitHub Releases](https://github.com/himomohi/AirTranslate/releases/latest) 下载。DMG 是最简单的安装路径，ZIP 也会继续作为轻量压缩包提供。
 
 - [下载 AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [下载 AirTranslate-1.4.0.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.0.zip)
+- [下载 AirTranslate-1.4.1.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.1.zip)
 - [下载 AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [查看版本历史](Release/VERSION-HISTORY.md)
 

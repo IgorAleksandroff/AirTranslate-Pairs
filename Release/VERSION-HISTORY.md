@@ -1,5 +1,18 @@
 # AirTranslate Version History
 
+## 1.4.1 - 2026-07-24
+
+### Changed
+
+- Apple-mode translated speech now waits for stable sentence boundaries during streaming and speaks final unpunctuated translations immediately when the request completes.
+- Dubbing speech progress is isolated in AirTranslateCore with focused regression coverage for streaming rewrites, finalization revisions, suffix replays, priming, and repeat expiry.
+
+### Fixed
+
+- Prevented translated speech from repeating the tail of a restored sentence after a shorter streaming rewrite.
+- Suppressed near-duplicate finalization variants and text that was already visible before dubbing was enabled.
+- Prevented short suffix replays while keeping legitimate later repeated phrases speakable.
+
 ## 1.4.0 - 2026-07-10
 
 ### Added

@@ -47,16 +47,16 @@ The default workflow uses Apple frameworks. GPT Realtime and Gemini Live Transla
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
-## What's New in 1.4.0
+## What's New in 1.4.1
 
-- **Long-session responsiveness:** Apple Mode automatically coalesces very large transcript updates, prepares large translation input away from the main UI thread, and uses a bounded LRU translation cache.
-- **Safer transcript continuity:** active sessions update the same transcript checkpoint every 30 seconds, and pending words are flushed on pause, stop, and app termination.
-- **Lower live-provider latency:** Gemini Live uses explicit voice activity detection and bounded pre-setup audio buffering, while OpenAI text translation streams partial results with bounded timeouts and retries.
-- **Bounded translated-audio backlog:** stale realtime or synthesized speech is discarded or accelerated instead of drifting progressively behind the captions.
-- **Clearer macOS controls:** listening, paused, and saved states are explicit; `Command-Return` starts or stops capture, and `Shift-Command-Space` pauses or resumes it.
-- **Accessibility and window stability:** Reduce Motion, transcript-region labels, keyboard access, and floating-caption recovery after display changes are improved.
+- **Steadier translated speech:** Apple Mode now waits for stable sentence boundaries before speaking streaming translated text.
+- **Final text still speaks:** final translations that arrive without punctuation are spoken when the translation request completes.
+- **Fewer repeated tails:** restored sentence tails, near-duplicate finalization variants, and short repeated suffixes are suppressed instead of being spoken again.
+- **Cleaner dubbing handoff:** enabling translated speech no longer rereads translation text that was already visible.
+- **Legitimate repeats preserved:** repeated phrases can still be spoken later in a session after the short replay window expires.
+- **Focused regression coverage:** the translated-speech progress logic is covered by dedicated AirTranslateCore tests.
 
-See the complete [AirTranslate 1.4.0 release notes](https://github.com/himomohi/AirTranslate/releases/tag/v1.4.0).
+See the complete [AirTranslate 1.4.1 release notes](https://github.com/himomohi/AirTranslate/releases/tag/v1.4.1).
 
 ## Core Features
 
@@ -135,7 +135,7 @@ Download the latest open-source build from [GitHub Releases](https://github.com/
 AirTranslate remains fully open-source under the Apache-2.0 License. The DMG is provided only as a convenient macOS installer, while all source code, build scripts, release materials, LICENSE, and NOTICE files remain available in this repository.
 
 - [Download AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [Download AirTranslate-1.4.0.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.0.zip)
+- [Download AirTranslate-1.4.1.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.1.zip)
 - [Download AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [View version history](Release/VERSION-HISTORY.md)
 

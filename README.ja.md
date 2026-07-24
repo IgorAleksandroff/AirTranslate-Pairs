@@ -47,16 +47,16 @@ AirTranslateは、Macで再生されている音声をリアルタイムで文�
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
-## 1.4.0の主な変更点
+## 1.4.1の主な変更点
 
-- **長時間セッションの応答性:** Apple標準モードは非常に長い記録の更新を自動的にまとめ、大きな翻訳入力の準備をUIメインスレッド外で行い、上限付きLRU翻訳キャッシュを使用します。
-- **安全な記録の継続:** キャプチャ中は30秒ごとに同じ記録ファイルを更新し、一時停止・停止・アプリ終了時には保留中の最後の単語まで保存します。
-- **APIモードの低遅延化:** Gemini Liveは明示的な音声アクティビティ検出と上限付き初期オーディオバッファを使用し、OpenAIテキスト翻訳は部分結果のストリーミング、タイムアウト、再試行を行います。
-- **翻訳音声バックログの制限:** 古いリアルタイム音声や合成音声が字幕から遅れ続けないよう、破棄または再生速度の調整を行います。
-- **明確なmacOS操作:** 聞き取り中・一時停止・保存完了をテキストで示し、`Command-Return`で開始/停止、`Shift-Command-Space`で一時停止/再開できます。
-- **アクセシビリティとウィンドウ安定性:** Reduce Motion、記録領域ラベル、キーボード操作、ディスプレイ変更後のフローティング字幕復元を改善しました。
+- **より安定した翻訳音声:** Apple標準モードは、ストリーミング翻訳文が安定した文境界に到達してから読み上げます。
+- **最後の文も読み上げ:** 句読点なしで届いた最終翻訳も、翻訳リクエスト完了時にすぐ音声出力します。
+- **繰り返し末尾の抑制:** 短く書き換わってから復元された文末、ほぼ同じ確定版、短い重複接尾部分を再度読み上げません。
+- **すっきりした吹き替え切替:** 翻訳音声を有効にしたとき、すでに表示されていた翻訳文を読み直しません。
+- **正当な繰り返しは維持:** 短いリプレイ防止時間を過ぎた実際の繰り返しフレーズは、同じセッション内でも再度読み上げられます。
+- **集中的な回帰テスト:** 翻訳音声の進行ロジックを専用のAirTranslateCoreテストで検証します。
 
-詳細は[AirTranslate 1.4.0リリースノート](https://github.com/himomohi/AirTranslate/releases/tag/v1.4.0)をご覧ください。
+詳細は[AirTranslate 1.4.1リリースノート](https://github.com/himomohi/AirTranslate/releases/tag/v1.4.1)をご覧ください。
 
 ## 主な機能
 
@@ -133,7 +133,7 @@ macOSのプライバシー権限を変更した後は、アプリを終了して
 最新のオープンソースビルドは[GitHub Releases](https://github.com/himomohi/AirTranslate/releases/latest)からダウンロードできます。DMGが最も簡単なインストール方法で、ZIPも軽量な配布形式として引き続き利用できます。
 
 - [AirTranslate.dmgをダウンロード](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [AirTranslate-1.4.0.zipをダウンロード](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.0.zip)
+- [AirTranslate-1.4.1.zipをダウンロード](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.1.zip)
 - [AirTranslate.dmg.sha256をダウンロード](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [バージョン履歴を見る](Release/VERSION-HISTORY.md)
 

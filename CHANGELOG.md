@@ -6,6 +6,19 @@ All notable changes to AirTranslate are documented in this file.
 
 No unreleased changes yet.
 
+## 1.4.1 - 2026-07-24
+
+### Changed
+
+- Translated speech output in Apple mode now waits for stable sentence boundaries during streaming and still speaks final translation text that arrives without punctuation.
+- Dubbing progress is now tracked by a focused core helper so speech-output replay behavior can be tested independently from the main session store.
+
+### Fixed
+
+- Fixed Apple-mode translated speech repeating restored sentence tails after shorter streaming rewrites.
+- Fixed translated speech replaying near-duplicate finalization variants or rereading text that was already visible when dubbing was enabled.
+- Fixed short repeated suffixes such as repeated closing words being spoken again while still allowing legitimate repeated phrases later in the session.
+
 ## 1.4.0 - 2026-07-10
 
 ### Added

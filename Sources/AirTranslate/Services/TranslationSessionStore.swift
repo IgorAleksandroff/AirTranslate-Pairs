@@ -118,8 +118,7 @@ final class TranslationSessionStore {
                 }
             } else {
                 stopSpeaking()
-                lastSpokenTranslatedText = ""
-                clearSpokenTranslationUnits()
+                dubbingSpeechProgress.reset()
             }
         }
     }
@@ -340,9 +339,7 @@ final class TranslationSessionStore {
     private var transcribeOnlyNoticeDismissTask: Task<Void, Never>?
     private var captureStartTask: Task<Void, Never>?
     private var captureStopTask: Task<Void, Never>?
-    private var lastSpokenTranslatedText = ""
-    private var spokenTranslationUnitKeys: Set<String> = []
-    private var spokenTranslationUnitKeyOrder: [String] = []
+    private var dubbingSpeechProgress = DubbingSpeechProgress()
     private var hasShownTranscribeOnlyNoticeForCurrentActivation = false
     private var floatingCaptionDisplayModeBeforeTranscribeOnly: FloatingCaptionDisplayMode?
     private var appleVoiceOutputEnabled = false
@@ -1422,8 +1419,7 @@ final class TranslationSessionStore {
         transcriptCheckpointTask?.cancel()
         transcriptCheckpointTask = nil
         stopSpeaking()
-        lastSpokenTranslatedText = ""
-        clearSpokenTranslationUnits()
+        dubbingSpeechProgress.reset()
         translationTask?.cancel()
         translationTask = nil
         transcriptCleanupTask?.cancel()
@@ -3499,7 +3495,7 @@ final class TranslationSessionStore {
         )
 
         updateFloatingTranslationPresentation(floatingTranslatedText, sourceText: sourceText)
-        speakTranslatedDeltaIfNeeded(organizedTranslatedText)
+        speakTranslatedDeltaIfNeeded(organizedTranslatedText, isFinal: finalizesRequest)
     }
 
     private func markTranslationUnavailable(_ message: String, for line: CaptionLine, matching sourceText: String) {
@@ -3649,51 +3645,18 @@ final class TranslationSessionStore {
         speechOutput.speak(text, language: targetLanguage)
     }
 
-    private func speakTranslatedDeltaIfNeeded(_ translatedText: String) {
+    private func speakTranslatedDeltaIfNeeded(_ translatedText: String, isFinal: Bool = false) {
         guard isRunning, !isPaused, isDubbingEnabled else { return }
         guard !isUsingProviderRealtimeTranslation else { return }
+        guard translatedText != AppText.translating else { return }
 
-        let currentText = speechReadyText(translatedText)
-        guard !currentText.isEmpty else { return }
+        guard let unspokenText = dubbingSpeechProgress.unspokenText(
+            from: translatedText,
+            languageID: targetLanguage.id,
+            isFinal: isFinal
+        ) else { return }
 
-        let previousText = lastSpokenTranslatedText
-        lastSpokenTranslatedText = currentText
-
-        guard let delta = speechDelta(previous: previousText, current: currentText),
-              let unspokenDelta = unspokenSpeechText(from: delta)
-        else {
-            return
-        }
-
-        speak(unspokenDelta)
-    }
-
-    private func speechReadyText(_ text: String) -> String {
-        guard text != AppText.translating else { return "" }
-
-        return text
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func speechDelta(previous: String, current: String) -> String? {
-        guard previous != current else { return nil }
-        guard !current.isEmpty else { return nil }
-
-        if previous.isEmpty {
-            return current
-        }
-
-        if current.hasPrefix(previous) {
-            return speakableText(String(current.dropFirst(previous.count)))
-        }
-
-        let sharedPrefixLength = commonPrefixLength(previous, current)
-        if sharedPrefixLength > previous.count / 2 {
-            return speakableText(String(current.dropFirst(sharedPrefixLength)))
-        }
-
-        return nil
+        speak(unspokenText)
     }
 
     private func commonPrefixLength(_ lhs: String, _ rhs: String) -> Int {
@@ -3705,108 +3668,16 @@ final class TranslationSessionStore {
         return length
     }
 
-    private func speakableText(_ text: String) -> String? {
-        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmedText.rangeOfCharacter(from: .letters.union(.decimalDigits)) != nil else {
-            return nil
-        }
-        return trimmedText
-    }
-
-    private func unspokenSpeechText(from text: String) -> String? {
-        let units = speechUnits(from: text)
-        guard !units.isEmpty else { return nil }
-
-        var unspokenUnits: [String] = []
-        for unit in units {
-            let key = normalizedSpeechUnitKey(unit)
-            guard !key.isEmpty, !spokenTranslationUnitKeys.contains(key) else {
-                continue
-            }
-
-            rememberSpokenTranslationUnitKey(key)
-            unspokenUnits.append(unit)
-        }
-
-        guard !unspokenUnits.isEmpty else { return nil }
-        return unspokenUnits.joined(separator: " ")
-    }
-
-    private func speechUnits(from text: String) -> [String] {
-        var units: [String] = []
-        var currentUnit = ""
-        let terminators = CharacterSet(charactersIn: ".!?。！？\n")
-
-        for scalar in text.unicodeScalars {
-            currentUnit.unicodeScalars.append(scalar)
-            if terminators.contains(scalar) {
-                let unit = speechReadyText(currentUnit)
-                if !unit.isEmpty {
-                    units.append(unit)
-                }
-                currentUnit = ""
-            }
-        }
-
-        let remainingUnit = speechReadyText(currentUnit)
-        if !remainingUnit.isEmpty {
-            units.append(remainingUnit)
-        }
-
-        return units
-    }
-
-    private func normalizedSpeechUnitKey(_ text: String) -> String {
-        let foldedText = text.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: targetLanguage.locale)
-        let allowedCharacters = CharacterSet.letters
-            .union(.decimalDigits)
-            .union(.whitespacesAndNewlines)
-        let filteredText = String(foldedText.unicodeScalars.map { scalar in
-            allowedCharacters.contains(scalar) ? Character(scalar) : " "
-        })
-
-        return filteredText
-            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private func rememberSpokenTranslationUnitKey(_ key: String) {
-        spokenTranslationUnitKeys.insert(key)
-        spokenTranslationUnitKeyOrder.append(key)
-
-        while spokenTranslationUnitKeyOrder.count > 160 {
-            let removedKey = spokenTranslationUnitKeyOrder.removeFirst()
-            if !spokenTranslationUnitKeyOrder.contains(removedKey) {
-                spokenTranslationUnitKeys.remove(removedKey)
-            }
-        }
-    }
-
-    private func rememberSpokenTranslationUnits(in text: String) {
-        for unit in speechUnits(from: text) {
-            let key = normalizedSpeechUnitKey(unit)
-            if !key.isEmpty {
-                rememberSpokenTranslationUnitKey(key)
-            }
-        }
-    }
-
-    private func clearSpokenTranslationUnits() {
-        spokenTranslationUnitKeys.removeAll()
-        spokenTranslationUnitKeyOrder.removeAll()
-    }
-
     private func resetDubbingProgress() {
-        lastSpokenTranslatedText = ""
-        clearSpokenTranslationUnits()
+        dubbingSpeechProgress.reset()
         stopSpeaking()
     }
 
     private func primeDubbingBaselineToCurrentTranslation() {
-        let currentTranslation = speechReadyText(lines.last?.translatedText ?? "")
-        lastSpokenTranslatedText = currentTranslation
-        clearSpokenTranslationUnits()
-        rememberSpokenTranslationUnits(in: currentTranslation)
+        dubbingSpeechProgress.prime(
+            with: lines.last?.translatedText ?? "",
+            languageID: targetLanguage.id
+        )
     }
 
     private func stopSpeaking() {
