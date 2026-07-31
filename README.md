@@ -47,6 +47,13 @@ The default workflow uses Apple frameworks. GPT Realtime and Gemini Live Transla
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
+## What's New in 1.4.2
+
+- **Reliable microphone permission prompt:** signed local and release builds now embed the macOS microphone audio-input entitlement required for permission requests.
+- **Release-signing guard:** packaging checks verify Hardened Runtime, the release/debug entitlement split, and the microphone permission description before distribution.
+
+See the complete [AirTranslate 1.4.2 release notes](https://github.com/himomohi/AirTranslate/releases/tag/v1.4.2).
+
 ## What's New in 1.4.1
 
 - **Steadier translated speech:** Apple Mode now waits for stable sentence boundaries before speaking streaming translated text.
@@ -135,7 +142,7 @@ Download the latest open-source build from [GitHub Releases](https://github.com/
 AirTranslate remains fully open-source under the Apache-2.0 License. The DMG is provided only as a convenient macOS installer, while all source code, build scripts, release materials, LICENSE, and NOTICE files remain available in this repository.
 
 - [Download AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [Download AirTranslate-1.4.1.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.1.zip)
+- [Download AirTranslate-1.4.2.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.2.zip)
 - [Download AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [View version history](Release/VERSION-HISTORY.md)
 

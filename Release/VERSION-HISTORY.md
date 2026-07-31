@@ -1,5 +1,12 @@
 # AirTranslate Version History
 
+## 1.4.2 - 2026-07-31
+
+### Fixed
+
+- Release and local app signatures now embed the required microphone audio-input entitlement while retaining Hardened Runtime.
+- The privacy-reset helper now resets Microphone permission, and packaging checks verify the release/debug entitlement separation before distribution.
+
 ## 1.4.1 - 2026-07-24
 
 ### Changed

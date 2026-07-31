@@ -47,6 +47,13 @@ AirTranslate 可以捕获 Mac 正在播放的音频，实时转写并翻译，�
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
+## 1.4.2 主要更新
+
+- **稳定请求麦克风权限:** 已签名的本地和发布构建现会嵌入 macOS 请求麦克风权限所需的 audio-input entitlement。
+- **发布签名检查:** 在分发前，打包检查会验证 Hardened Runtime、发布/调试 entitlement 的分离，以及麦克风权限说明。
+
+完整内容请参阅 [AirTranslate 1.4.2 发布说明](https://github.com/himomohi/AirTranslate/releases/tag/v1.4.2)。
+
 ## 1.4.1 主要更新
 
 - **更稳定的译文语音:** Apple 默认模式会等流式译文到达稳定句子边界后再朗读。
@@ -133,7 +140,7 @@ AirTranslate 只请求捕获和转写流程需要的权限。
 最新开源构建可在 [GitHub Releases](https://github.com/himomohi/AirTranslate/releases/latest) 下载。DMG 是最简单的安装路径，ZIP 也会继续作为轻量压缩包提供。
 
 - [下载 AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [下载 AirTranslate-1.4.1.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.1.zip)
+- [下载 AirTranslate-1.4.2.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.2.zip)
 - [下载 AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [查看版本历史](Release/VERSION-HISTORY.md)
 

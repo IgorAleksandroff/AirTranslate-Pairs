@@ -14,7 +14,15 @@ APP_MACOS="$APP_CONTENTS/MacOS"
 APP_RESOURCES="$APP_CONTENTS/Resources"
 APP_BINARY="$APP_MACOS/$APP_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
+ENTITLEMENTS_PATH="$ROOT_DIR/Resources/AirTranslate.entitlements"
+DEBUG_ENTITLEMENTS_PATH="$ROOT_DIR/Resources/AirTranslate.debug.entitlements"
 CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-}"
+
+case "$MODE" in
+  --debug|debug)
+    ENTITLEMENTS_PATH="$DEBUG_ENTITLEMENTS_PATH"
+    ;;
+esac
 
 cd "$ROOT_DIR"
 
@@ -44,9 +52,9 @@ select_code_sign_identity() {
 
 SIGN_IDENTITY="$(select_code_sign_identity)"
 if [[ -n "$SIGN_IDENTITY" ]]; then
-  /usr/bin/codesign --force --deep --timestamp=none --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
+  /usr/bin/codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS_PATH" --timestamp=none --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
 else
-  /usr/bin/codesign --force --deep --sign - "$APP_BUNDLE"
+  /usr/bin/codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS_PATH" --sign - "$APP_BUNDLE"
   echo "warning: no persistent code signing identity found; macOS privacy grants may reset after rebuilds" >&2
 fi
 
@@ -58,8 +66,9 @@ case "$MODE" in
   --reset-permissions|reset-permissions)
     /usr/bin/tccutil reset ScreenCapture "$BUNDLE_ID" || true
     /usr/bin/tccutil reset AudioCapture "$BUNDLE_ID" || true
+    /usr/bin/tccutil reset Microphone "$BUNDLE_ID" || true
     /usr/bin/tccutil reset SpeechRecognition "$BUNDLE_ID" || true
-    echo "Reset AirTranslate privacy grants. Relaunch and approve Screen Recording, System Audio Recording, and Speech Recognition once."
+    echo "Reset AirTranslate privacy grants. Relaunch and approve Screen Recording, System Audio Recording, Microphone (when selected), and Speech Recognition once."
     ;;
   run)
     open_app

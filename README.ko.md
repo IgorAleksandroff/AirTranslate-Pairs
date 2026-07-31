@@ -47,6 +47,13 @@ AirTranslate는 Mac에서 재생되는 소리를 실시간으로 기록하고 �
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
+## 1.4.2 주요 변경사항
+
+- **안정적인 마이크 권한 요청:** 서명된 로컬 및 릴리즈 빌드에 macOS 마이크 권한 요청에 필요한 audio-input 엔타이틀먼트를 포함합니다.
+- **릴리즈 서명 점검:** 배포 전에 Hardened Runtime, 릴리즈/디버그 엔타이틀먼트 분리, 마이크 권한 설명을 패키징 검사로 확인합니다.
+
+전체 내용은 [AirTranslate 1.4.2 릴리즈 노트](https://github.com/himomohi/AirTranslate/releases/tag/v1.4.2)에서 확인할 수 있습니다.
+
 ## 1.4.1 주요 변경사항
 
 - **더 안정적인 번역 음성:** Apple 기본 모드는 스트리밍 번역문이 안정적인 문장 경계에 도달한 뒤 음성으로 읽습니다.
@@ -135,7 +142,7 @@ macOS 개인정보 보호 권한을 바꾼 뒤에는 앱을 종료하고 다시 
 AirTranslate는 Apache-2.0 라이선스의 오픈소스 프로젝트입니다. DMG 파일은 macOS 사용자가 더 쉽게 설치할 수 있도록 추가로 제공되는 설치 패키지이며, 소스코드 공개를 대체하는 것이 아닙니다. 소스코드, 빌드 스크립트, 릴리즈 자료, LICENSE, NOTICE 파일은 모두 이 저장소에 공개되어 있습니다.
 
 - [AirTranslate.dmg 다운로드](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [AirTranslate-1.4.1.zip 다운로드](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.1.zip)
+- [AirTranslate-1.4.2.zip 다운로드](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.2.zip)
 - [AirTranslate.dmg.sha256 다운로드](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [버전 히스토리 보기](Release/VERSION-HISTORY.md)
 
