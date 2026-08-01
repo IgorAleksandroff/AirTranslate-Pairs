@@ -159,6 +159,8 @@ private final class SpeechAssetAsyncMutex: @unchecked Sendable {
     private var isAcquired = false
     private var waiters: [CheckedContinuation<Void, Never>] = []
 
+    // Cancellation does not remove a queued waiter: it still acquires the
+    // mutex, so callers must check cancellation after acquisition and release.
     func acquire() async {
         await withCheckedContinuation { continuation in
             let shouldResumeImmediately = stateLock.withLock {
@@ -184,6 +186,35 @@ private final class SpeechAssetAsyncMutex: @unchecked Sendable {
             return waiters.removeFirst()
         }
         nextWaiter?.resume()
+    }
+}
+
+private final class LifecycleOneShotGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+    private var isOpen = false
+
+    func wait() async {
+        await withCheckedContinuation { continuation in
+            let shouldResumeImmediately = lock.withLock {
+                guard !isOpen else { return true }
+                waiters.append(continuation)
+                return false
+            }
+            if shouldResumeImmediately {
+                continuation.resume()
+            }
+        }
+    }
+
+    func open() {
+        let waiters: [CheckedContinuation<Void, Never>] = lock.withLock {
+            guard !isOpen else { return [] }
+            isOpen = true
+            defer { self.waiters = [] }
+            return self.waiters
+        }
+        waiters.forEach { $0.resume() }
     }
 }
 
@@ -244,6 +275,9 @@ final class SpeechAssetReservationCoordinator: @unchecked Sendable {
             id: nextReservationID,
             locale: locale
         )
+        // `claim` runs while the mutex is held, after the serialized asset
+        // reservation await. It must not recursively reserve/release or await
+        // work that requires this coordinator.
         guard claim(reservation) else {
             if needsSystemReservation {
                 _ = await releaseLocale(locale)
@@ -297,6 +331,12 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
         let cleanupTask: Task<Void, Never>
     }
 
+    private struct LifecycleTransitionPlan {
+        let transition: LifecycleTransition
+        let resources: LifecycleResources
+        let producerTeardownGate: LifecycleOneShotGate
+    }
+
     weak var delegate: LiveSpeechTranscriberDelegate?
 
     private static let reusablePCMBufferCount = 48
@@ -319,6 +359,7 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     private let assetReservationCoordinator: SpeechAssetReservationCoordinator
 #if DEBUG
     private var cleanupCompletionHookForTesting: (@Sendable () async -> Void)?
+    private var postRunningTaskPublicationHookForTesting: (@Sendable () -> Void)?
 #endif
     private var lifecycleGeneration: UInt64 = 0
     private var cleanupTask: Task<Void, Never>?
@@ -396,13 +437,10 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
                     locale: supportedLocale
                 ) { [weak self] reservation in
                     guard let self else { return false }
-                    return stateLock.withLock {
-                        guard self.lifecycleGeneration == lifecycleGeneration else {
-                            return false
-                        }
-                        assetReservations.append(reservation)
-                        return true
-                    }
+                    return claimAssetReservation(
+                        reservation,
+                        lifecycleGeneration: lifecycleGeneration
+                    )
                 }
                 try Task.checkCancellation()
                 transcribers.append((
@@ -429,6 +467,10 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
                 return true
             }
             guard didPublishPreparationResources else {
+                // This analyzer never entered lifecycle ownership, so this
+                // start remains responsible for its local teardown. Any asset
+                // reservations were claimed separately and are owned by the
+                // lifecycle transition that invalidated this generation.
                 inputQueue.finish()
                 await analyzer.cancelAndFinishNow()
                 throw CancellationError()
@@ -439,49 +481,50 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
             try ensureLifecycleIsCurrent(lifecycleGeneration)
             try Task.checkCancellation()
 
-            let analyzeTask = Task { [weak self] in
-                do {
-                    try await analyzer.start(inputSequence: inputQueue.stream)
-                } catch {
-                    guard let self else { return }
-                    self.delegate?.liveSpeechTranscriber(self, didFail: error)
-                }
-            }
-
-            let resultTasks = transcribers.map { entry in
-                Task { [weak self] in
+            let didPublishRunningTasks = publishRunningTasks(
+                lifecycleGeneration: lifecycleGeneration
+            ) { producerStartGate in
+                let analyzeTask = Task { [weak self] in
+                    await producerStartGate.wait()
+                    guard !Task.isCancelled else { return }
                     do {
-                        for try await result in entry.transcriber.results {
-                            let text = String(result.text.characters)
-                                .trimmingCharacters(in: .whitespacesAndNewlines)
-                            guard !text.isEmpty else { continue }
-                            guard let self else { return }
-                            self.delegate?.liveSpeechTranscriber(
-                                self,
-                                didRecognize: text,
-                                language: entry.language,
-                                confidence: Self.averageConfidence(in: result.text)
-                            )
-                        }
+                        try await analyzer.start(inputSequence: inputQueue.stream)
                     } catch {
                         guard let self else { return }
                         self.delegate?.liveSpeechTranscriber(self, didFail: error)
                     }
                 }
-            }
-            let didPublishRunningTasks = stateLock.withLock {
-                guard self.lifecycleGeneration == lifecycleGeneration else {
-                    return false
+
+                let resultTasks = transcribers.map { entry in
+                    Task { [weak self] in
+                        await producerStartGate.wait()
+                        guard !Task.isCancelled else { return }
+                        do {
+                            for try await result in entry.transcriber.results {
+                                let text = String(result.text.characters)
+                                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                                guard !text.isEmpty else { continue }
+                                guard let self else { return }
+                                self.delegate?.liveSpeechTranscriber(
+                                    self,
+                                    didRecognize: text,
+                                    language: entry.language,
+                                    confidence: Self.averageConfidence(in: result.text)
+                                )
+                            }
+                        } catch {
+                            guard let self else { return }
+                            self.delegate?.liveSpeechTranscriber(self, didFail: error)
+                        }
+                    }
                 }
-                self.analyzeTask = analyzeTask
-                self.resultTasks = resultTasks
-                return true
+                return (analyzeTask, resultTasks)
             }
             guard didPublishRunningTasks else {
-                analyzeTask.cancel()
-                resultTasks.forEach { $0.cancel() }
-                inputQueue.finish()
-                await analyzer.cancelAndFinishNow()
+                // A newer lifecycle transition already owns inputQueue,
+                // analyzer, and asset reservations. The producer factory was
+                // not invoked, so there are no local tasks to cancel and no
+                // analyzer cleanup to duplicate.
                 throw CancellationError()
             }
             try Task.checkCancellation()
@@ -502,6 +545,53 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
             }
             throw error
         }
+    }
+
+    private func claimAssetReservation(
+        _ reservation: SpeechAssetReservation,
+        lifecycleGeneration: UInt64
+    ) -> Bool {
+        stateLock.withLock {
+            guard self.lifecycleGeneration == lifecycleGeneration else {
+                return false
+            }
+            assetReservations.append(reservation)
+            return true
+        }
+    }
+
+    private func publishRunningTasks(
+        lifecycleGeneration: UInt64,
+        makeTasks: (LifecycleOneShotGate) -> (
+            analyzeTask: Task<Void, Never>,
+            resultTasks: [Task<Void, Never>]
+        )
+    ) -> Bool {
+        let producerStartGate = LifecycleOneShotGate()
+#if DEBUG
+        var postPublicationHook: (@Sendable () -> Void)?
+#endif
+        let didPublish = stateLock.withLock {
+            guard self.lifecycleGeneration == lifecycleGeneration else {
+                return false
+            }
+
+            // Task construction and lifecycle ownership are one critical
+            // section. A competing stop either prevents construction or
+            // snapshots every newly created producer.
+            let tasks = makeTasks(producerStartGate)
+            analyzeTask = tasks.analyzeTask
+            resultTasks = tasks.resultTasks
+#if DEBUG
+            postPublicationHook = postRunningTaskPublicationHookForTesting
+#endif
+            return true
+        }
+#if DEBUG
+        postPublicationHook?()
+#endif
+        producerStartGate.open()
+        return didPublish
     }
 
     func append(_ sampleBuffer: CMSampleBuffer) {
@@ -560,7 +650,7 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     private func transitionLifecycle(
         expectedGeneration: UInt64?
     ) -> LifecycleTransition? {
-        let transition: LifecycleTransition? = stateLock.withLock {
+        let plan: LifecycleTransitionPlan? = stateLock.withLock {
             if let expectedGeneration,
                lifecycleGeneration != expectedGeneration {
                 return nil
@@ -581,22 +671,16 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
             resultTasks = []
             assetReservations = []
 
-            // Detach and stop synchronous producers while holding the same
-            // lock that publishes the cleanup tail. A later start therefore
-            // cannot observe an empty lifecycle before this teardown is
-            // registered.
-            resources.inputQueue?.finish()
-            resources.analyzeTask?.cancel()
-            resources.resultTasks.forEach { $0.cancel() }
-
             let previousCleanupTask = cleanupTask
             let analyzer = resources.analyzer
             let assetReservations = resources.assetReservations
+            let producerTeardownGate = LifecycleOneShotGate()
 #if DEBUG
             let cleanupCompletionHookForTesting = cleanupCompletionHookForTesting
 #endif
             let assetReservationCoordinator = assetReservationCoordinator
             let cleanupTask = Task {
+                await producerTeardownGate.wait()
                 await previousCleanupTask?.value
                 if let analyzer {
                     await analyzer.cancelAndFinishNow()
@@ -609,15 +693,27 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
 #endif
             }
             self.cleanupTask = cleanupTask
-            return LifecycleTransition(
-                generation: lifecycleGeneration,
-                cleanupTask: cleanupTask
+            return LifecycleTransitionPlan(
+                transition: LifecycleTransition(
+                    generation: lifecycleGeneration,
+                    cleanupTask: cleanupTask
+                ),
+                resources: resources,
+                producerTeardownGate: producerTeardownGate
             )
         }
-        if transition != nil {
-            resetReusablePCMBuffers()
-        }
-        return transition
+        guard let plan else { return nil }
+
+        // The cleanup tail is already published, so a competing start must
+        // wait for it. Stop synchronous producers only after releasing
+        // stateLock because finish/cancel may invoke callbacks inline.
+        plan.resources.inputQueue?.finish()
+        plan.resources.analyzeTask?.cancel()
+        plan.resources.resultTasks.forEach { $0.cancel() }
+        plan.producerTeardownGate.open()
+
+        resetReusablePCMBuffers()
+        return plan.transition
     }
 
     private func ensureLifecycleIsCurrent(_ expectedGeneration: UInt64) throws {
@@ -666,6 +762,69 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     ) {
         stateLock.withLock {
             cleanupCompletionHookForTesting = hook
+        }
+    }
+
+    func installAnalyzeTaskCancellationLockProbeForTesting(
+        _ probe: @escaping @Sendable (Bool) -> Void
+    ) {
+        let task = Task { [weak self] in
+            await withTaskCancellationHandler {
+                _ = try? await Task.sleep(for: .seconds(60))
+            } onCancel: { [weak self] in
+                guard let self else { return }
+                let acquiredStateLock = stateLock.try()
+                if acquiredStateLock {
+                    stateLock.unlock()
+                }
+                probe(acquiredStateLock)
+            }
+        }
+        stateLock.withLock {
+            precondition(analyzeTask == nil)
+            analyzeTask = task
+        }
+    }
+
+    var lifecycleGenerationForTesting: UInt64 {
+        stateLock.withLock { lifecycleGeneration }
+    }
+
+    func claimAssetReservationForTesting(
+        _ reservation: SpeechAssetReservation,
+        lifecycleGeneration: UInt64
+    ) -> Bool {
+        claimAssetReservation(
+            reservation,
+            lifecycleGeneration: lifecycleGeneration
+        )
+    }
+
+    func setPostRunningTaskPublicationHookForTesting(
+        _ hook: (@Sendable () -> Void)?
+    ) {
+        stateLock.withLock {
+            postRunningTaskPublicationHookForTesting = hook
+        }
+    }
+
+    func publishCancellationProbeTasksForTesting(
+        lifecycleGeneration: UInt64,
+        onStarted: @escaping @Sendable (String) -> Void,
+        onCancelled: @escaping @Sendable (String) -> Void
+    ) -> Bool {
+        publishRunningTasks(lifecycleGeneration: lifecycleGeneration) { producerStartGate in
+            let makeTask: @Sendable (String) -> Task<Void, Never> = { name in
+                Task {
+                    await producerStartGate.wait()
+                    guard !Task.isCancelled else {
+                        onCancelled(name)
+                        return
+                    }
+                    onStarted(name)
+                }
+            }
+            return (makeTask("analyze"), [makeTask("result")])
         }
     }
 

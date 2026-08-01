@@ -111,6 +111,63 @@ private final class SpeechReservationClaimState: @unchecked Sendable {
     }
 }
 
+private final class SpeechStateLockProbe: @unchecked Sendable {
+    private let lock = NSLock()
+    private var result: Bool?
+
+    func record(_ result: Bool) {
+        lock.withLock {
+            self.result = result
+        }
+    }
+
+    func currentResult() -> Bool? {
+        lock.withLock { result }
+    }
+}
+
+private final class SpeechLifecycleOwnershipRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [String] = []
+
+    func record(_ event: String) {
+        lock.withLock {
+            events.append(event)
+        }
+    }
+
+    func contains(_ event: String) -> Bool {
+        lock.withLock {
+            events.contains(event)
+        }
+    }
+
+    func snapshot() -> [String] {
+        lock.withLock { events }
+    }
+}
+
+private final class SuspendedProducerStartGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private let resumeSemaphore = DispatchSemaphore(value: 0)
+    private var isSuspended = false
+
+    func suspend() {
+        lock.withLock {
+            isSuspended = true
+        }
+        resumeSemaphore.wait()
+    }
+
+    func suspended() -> Bool {
+        lock.withLock { isSuspended }
+    }
+
+    func resume() {
+        resumeSemaphore.signal()
+    }
+}
+
 @Suite
 struct PipelineLifecycleTests {
     @Test
@@ -266,13 +323,13 @@ struct PipelineLifecycleTests {
         let firstStart = Task.detached {
             try await firstTranscriber.start(languages: [.english])
         }
-        await waitForPendingAuthorization(firstAuthorization)
+        await waitForPending { await firstAuthorization.isPending() }
         firstStart.cancel()
 
         let secondStart = Task.detached {
             try await secondTranscriber.start(languages: [.english])
         }
-        await waitForPendingAuthorization(secondAuthorization)
+        await waitForPending { await secondAuthorization.isPending() }
 
         // Model a late, non-cooperative OS callback for G1 after G2 is
         // already waiting for its own permission result.
@@ -315,7 +372,7 @@ struct PipelineLifecycleTests {
         let start = Task.detached {
             try await transcriber.start(languages: [.english])
         }
-        await waitForPendingAuthorization(authorization)
+        await waitForPending { await authorization.isPending() }
 
         transcriber.stop()
         await authorization.resume(authorized: true)
@@ -347,7 +404,7 @@ struct PipelineLifecycleTests {
         }
 
         transcriber.stop()
-        await waitForPendingCleanup(cleanup)
+        await waitForPending { await cleanup.isFirstCleanupPending() }
 
         let restart = Task.detached {
             try await transcriber.start(languages: [.english])
@@ -371,6 +428,143 @@ struct PipelineLifecycleTests {
     }
 
     @Test
+    func lifecycleCancellationRunsAfterStateLockIsReleased() async {
+        let probe = SpeechStateLockProbe()
+        let transcriber = LiveSpeechTranscriber()
+        transcriber.installAnalyzeTaskCancellationLockProbeForTesting {
+            probe.record($0)
+        }
+
+        transcriber.stop()
+        for _ in 0..<50 where probe.currentResult() == nil {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(probe.currentResult() == true)
+        await transcriber.stopAndWaitForCleanup()
+    }
+
+    @Test
+    func stopBeforeProducerOwnershipDoesNotCreateOrphanOrDoubleCleanAssets() async throws {
+        let recorder = SpeechLifecycleOwnershipRecorder()
+        let coordinator = SpeechAssetReservationCoordinator(
+            reserveLocale: { _ in
+                recorder.record("asset-reserved")
+                return true
+            },
+            releaseLocale: { _ in
+                recorder.record("asset-released")
+                return true
+            }
+        )
+        let transcriber = LiveSpeechTranscriber(
+            assetReservationCoordinator: coordinator
+        )
+        transcriber.setCleanupCompletionHookForTesting {
+            recorder.record("cleanup-complete")
+        }
+        let lifecycleGeneration = transcriber.lifecycleGenerationForTesting
+        _ = try await coordinator.reserve(
+            locale: Locale(identifier: "en-US")
+        ) { reservation in
+            transcriber.claimAssetReservationForTesting(
+                reservation,
+                lifecycleGeneration: lifecycleGeneration
+            )
+        }
+
+        // Stop wins after preparation ownership but before producer
+        // construction. The stale publication attempt must not invoke its
+        // producer factory or repeat lifecycle cleanup.
+        await transcriber.stopAndWaitForCleanup()
+        let didPublishStaleProducer = transcriber.publishCancellationProbeTasksForTesting(
+            lifecycleGeneration: lifecycleGeneration,
+            onStarted: { recorder.record("\($0)-started") },
+            onCancelled: { recorder.record("\($0)-cancelled") }
+        )
+
+        #expect(!didPublishStaleProducer)
+        #expect(!recorder.contains("analyze-started"))
+        #expect(!recorder.contains("result-started"))
+        #expect(
+            recorder.snapshot() == [
+                "asset-reserved",
+                "asset-released",
+                "cleanup-complete",
+            ]
+        )
+        #expect(!transcriber.hasActiveResourcesForTesting)
+    }
+
+    @Test
+    func stopAfterProducerOwnershipCancelsBeforeStartGateAndCleansOnce() async throws {
+        let recorder = SpeechLifecycleOwnershipRecorder()
+        let suspendedGate = SuspendedProducerStartGate()
+        let coordinator = SpeechAssetReservationCoordinator(
+            reserveLocale: { _ in
+                recorder.record("asset-reserved")
+                return true
+            },
+            releaseLocale: { _ in
+                recorder.record("asset-released")
+                return true
+            }
+        )
+        let transcriber = LiveSpeechTranscriber(
+            assetReservationCoordinator: coordinator
+        )
+        transcriber.setCleanupCompletionHookForTesting {
+            recorder.record("cleanup-complete")
+        }
+        transcriber.setPostRunningTaskPublicationHookForTesting {
+            suspendedGate.suspend()
+        }
+        let lifecycleGeneration = transcriber.lifecycleGenerationForTesting
+        _ = try await coordinator.reserve(
+            locale: Locale(identifier: "en-US")
+        ) { reservation in
+            transcriber.claimAssetReservationForTesting(
+                reservation,
+                lifecycleGeneration: lifecycleGeneration
+            )
+        }
+
+        let publication = Task.detached {
+            transcriber.publishCancellationProbeTasksForTesting(
+                lifecycleGeneration: lifecycleGeneration,
+                onStarted: { recorder.record("\($0)-started") },
+                onCancelled: { recorder.record("\($0)-cancelled") }
+            )
+        }
+        await waitForPending { suspendedGate.suspended() }
+
+        let cleanup = Task.detached {
+            await transcriber.stopAndWaitForCleanup()
+        }
+        await waitForPending { recorder.contains("cleanup-complete") }
+        suspendedGate.resume()
+
+        #expect(await publication.value)
+        await cleanup.value
+        await waitForPending {
+            recorder.contains("analyze-cancelled")
+                && recorder.contains("result-cancelled")
+        }
+
+        let events = recorder.snapshot()
+        #expect(events.filter { $0 == "asset-released" }.count == 1)
+        #expect(events.filter { $0 == "cleanup-complete" }.count == 1)
+        #expect(!events.contains("analyze-started"))
+        #expect(!events.contains("result-started"))
+        #expect(events.first == "asset-reserved")
+        #expect(
+            events.firstIndex(of: "asset-released")!
+                < events.firstIndex(of: "cleanup-complete")!
+        )
+        #expect(!transcriber.hasActiveResourcesForTesting)
+    }
+
+    @Test
     func staleInFlightReserveReleasesBeforeNewOwnerAndCannotReleaseItLater() async throws {
         let inventory = SuspendedAssetInventory()
         let coordinator = SpeechAssetReservationCoordinator(
@@ -386,7 +580,7 @@ struct PipelineLifecycleTests {
                 claim: staleClaim.claim
             )
         }
-        await waitForPendingReserve(inventory)
+        await waitForPending { await inventory.isFirstReservePending() }
 
         staleClaim.invalidate()
         staleReserve.cancel()
@@ -531,47 +725,18 @@ struct PipelineLifecycleTests {
         #expect(!session.isStarting)
     }
 
-    private func waitForPendingAuthorization(
-        _ authorization: SuspendedSpeechAuthorization
+    private func waitForPending(
+        _ isPending: @escaping () async -> Bool
     ) async {
         let clock = ContinuousClock()
         let deadline = clock.now.advanced(by: .milliseconds(500))
         while clock.now < deadline {
-            if await authorization.isPending() {
+            if await isPending() {
                 return
             }
             try? await Task.sleep(for: .milliseconds(10))
         }
-        let isPending = await authorization.isPending()
-        #expect(isPending)
-    }
-
-    private func waitForPendingCleanup(
-        _ cleanup: SuspendedSpeechCleanup
-    ) async {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .milliseconds(500))
-        while clock.now < deadline {
-            if await cleanup.isFirstCleanupPending() {
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(await cleanup.isFirstCleanupPending())
-    }
-
-    private func waitForPendingReserve(
-        _ inventory: SuspendedAssetInventory
-    ) async {
-        let clock = ContinuousClock()
-        let deadline = clock.now.advanced(by: .milliseconds(500))
-        while clock.now < deadline {
-            if await inventory.isFirstReservePending() {
-                return
-            }
-            try? await Task.sleep(for: .milliseconds(10))
-        }
-        #expect(await inventory.isFirstReservePending())
+        #expect(await isPending())
     }
 
     private func makeConfiguration(
