@@ -6,6 +6,24 @@ All notable changes to AirTranslate are documented in this file.
 
 No unreleased changes yet.
 
+## 1.5.0 - 2026-08-02
+
+### Added
+
+- Added the optional `gpt-live-transcribe` GPT Transcription mode for source-language captions. It requires a user-provided OpenAI API key; Apple Mode remains the default local-first path.
+- Added focused regression coverage for GPT transcription selection and restore behavior, session configuration locking, permission cancellation, external capture stops, and speech-input backpressure.
+
+### Changed
+
+- Apple Mode now treats a start attempt as one generation-scoped session: permission waits, warm-up work, and callbacks from an old attempt cannot alter a newer session.
+- Settings remain locked while a capture start is in flight and are restored after a blocked, cancelled, or failed start.
+
+### Fixed
+
+- Fixed Apple system-audio sessions so an external user stop saves the transcript, releases the session state, and allows a clean restart.
+- Fixed live speech input backpressure so audio is never silently discarded; the app stops with a visible controlled error instead.
+- Fixed stale OpenAI and Gemini connection callbacks and provider errors from overriding the active session, and keep user-visible provider failures free of raw connection details.
+
 ## 1.4.2 - 2026-07-31
 
 ### Fixed

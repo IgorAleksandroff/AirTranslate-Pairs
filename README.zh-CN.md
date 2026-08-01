@@ -47,6 +47,15 @@ AirTranslate 可以捕获 Mac 正在播放的音频，实时转写并翻译，�
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
+## 1.5.0 主要更新
+
+- **加强 Apple 默认模式生命周期:** Apple 默认模式仍是本地优先的默认路径；来自旧启动尝试的延迟授权响应、warm-up 和采集回调无法再改变新会话。
+- **正确处理外部停止:** 即使在应用外停止 macOS 系统音频采集，应用也会保存记录、解除会话锁定，并允许重新开始。
+- **不再静默丢失输入:** 语音输入 backpressure 不会再静默丢弃音频，而是以用户可见的受控停止处理。
+- **可选 GPT 转写:** 仅在提供 OpenAI API key 时才可用 `gpt-live-transcribe` 生成原文字幕；它与 GPT 实时翻译是独立模式。
+
+完整内容请参阅 [AirTranslate 1.5.0 发布说明](https://github.com/himomohi/AirTranslate/releases/tag/v1.5.0)。
+
 ## 1.4.2 主要更新
 
 - **稳定请求麦克风权限:** 已签名的本地和发布构建现会嵌入 macOS 请求麦克风权限所需的 audio-input entitlement。
@@ -73,6 +82,7 @@ AirTranslate 可以捕获 Mac 正在播放的音频，实时转写并翻译，�
 - 只显示原文的 Transcribe Only 模式
 - 支持内置麦克风、蓝牙与 AirPods 麦克风输入
 - 基于 OpenAI Realtime Translation 的 GPT 模式
+- 用于原文字幕的可选 `gpt-live-transcribe` GPT 转写模式
 - Gemini 3.5 Live Translate 模式
 - 面向 API 翻译流的 LIVE 翻译模式
 - Apple 默认模式的源语言自动检测已暂时停用，以改进语言切换稳定性
@@ -92,6 +102,7 @@ AirTranslate 将快速选择和详细设置分开。
 | --- | --- | --- |
 | Apple 默认模式 | 本地优先的转写和翻译 | 使用 Apple Speech 转写，并用 Apple Translation 翻译所选语言对。源语言自动检测已暂时停用，以改进语言切换稳定性。 |
 | GPT 模式 | OpenAI Realtime 实时翻译 | 将音频直接流式发送到 OpenAI Realtime Translation。如果没有保存 API key，AirTranslate 会打开设置弹窗并聚焦 API key 输入框。 |
+| GPT 转写 | OpenAI 原文字幕 | 在可选模式中提供 OpenAI API key 后，使用 `gpt-live-transcribe` 生成不含翻译的原文字幕。 |
 | Gemini Live | Gemini 3.5 Live Translate | 将音频直接流式发送到 Gemini Live Translate，并显示返回的输入和翻译转写。如果没有保存 Gemini API key，AirTranslate 会打开设置弹窗并聚焦 key 输入框。 |
 | 仅转写 | 只需要原文字幕 | 不运行翻译，只保留原文记录。 |
 | LIVE 翻译 | 需要模型直接生成译文流 | 使用所选 API 提供方的实时翻译模型直接生成翻译结果。 |
@@ -103,7 +114,7 @@ GPT/Gemini 模型细节、API key 输入、记录修正和语音输出都在齿�
 AirTranslate 不包含自有后端账号系统。
 
 - Apple 默认模式使用 macOS 框架和 Apple 语言资源。
-- 只有启用 GPT 模式时才会发送 OpenAI 请求。
+- 只有启用 GPT 模式或可选 GPT 转写模式时才会发送 OpenAI 请求。
 - 只有启用 Gemini Live 模式时才会发送 Gemini 请求。
 - OpenAI 和 Gemini API key 不会硬编码、提交到仓库，也不会包含在发布包中。
 - API key 使用 `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly` 保存到 macOS Keychain。
@@ -140,7 +151,7 @@ AirTranslate 只请求捕获和转写流程需要的权限。
 最新开源构建可在 [GitHub Releases](https://github.com/himomohi/AirTranslate/releases/latest) 下载。DMG 是最简单的安装路径，ZIP 也会继续作为轻量压缩包提供。
 
 - [下载 AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [下载 AirTranslate-1.4.2.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.2.zip)
+- [下载 AirTranslate-1.5.0.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.5.0.zip)
 - [下载 AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [查看版本历史](Release/VERSION-HISTORY.md)
 

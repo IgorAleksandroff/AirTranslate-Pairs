@@ -47,6 +47,15 @@ The default workflow uses Apple frameworks. GPT Realtime and Gemini Live Transla
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
+## What's New in 1.5.0
+
+- **Apple Mode lifecycle hardening:** Apple Mode remains the default local-first path and now ignores late permission, warm-up, and capture callbacks from an older start attempt.
+- **Clean external stops:** stopping macOS system-audio capture outside the app now saves the transcript, unlocks the session, and permits a clean restart.
+- **No silent speech-input loss:** audio backpressure becomes a visible controlled stop instead of silently dropping input.
+- **Optional GPT Transcription:** choose `gpt-live-transcribe` for source-only captions only when you provide an OpenAI API key; it is separate from GPT live translation.
+
+See the complete [AirTranslate 1.5.0 release notes](https://github.com/himomohi/AirTranslate/releases/tag/v1.5.0).
+
 ## What's New in 1.4.2
 
 - **Reliable microphone permission prompt:** signed local and release builds now embed the macOS microphone audio-input entitlement required for permission requests.
@@ -74,6 +83,7 @@ See the complete [AirTranslate 1.4.1 release notes](https://github.com/himomohi/
 - Built-in, Bluetooth, and AirPods mic input support
 - Apple basic-mode source-language auto-detect is temporarily disabled while language-switch handling is improved.
 - GPT mode with OpenAI Realtime Translation
+- Optional GPT Transcription with `gpt-live-transcribe` for source-only captions
 - Gemini 3.5 Live Translate mode
 - Microphone input stability fixes for duplicate segments and noisy transitions
 - LIVE Translation mode for API-backed translated streams
@@ -92,6 +102,7 @@ AirTranslate separates the quick choice from the detailed setup.
 | --- | --- | --- |
 | Apple Mode | Local-first transcription and translation | Uses Apple Speech for transcription and Apple Translation for the selected language pair. Source-language auto-detect is temporarily disabled while language-switch handling is improved. |
 | GPT Mode | OpenAI Realtime live translation | Streams audio directly to OpenAI Realtime Translation. If no API key is saved, AirTranslate opens the settings modal and focuses the API key field. |
+| GPT Transcription | OpenAI source-only captions | Uses `gpt-live-transcribe` for source-language captions without translation after you choose this optional mode and provide an OpenAI API key. |
 | Gemini Live | Gemini 3.5 Live Translate | Streams audio directly to Gemini Live Translate and shows the returned input and translated transcripts. If no Gemini API key is saved, AirTranslate opens the settings modal and focuses the key field. |
 | Transcribe Only | Source captions without translation | Records source-language captions without running translation. |
 | LIVE Translation | Direct translated stream | Uses the selected API provider's live translation model path when you want the model to produce the translated stream directly. |
@@ -103,7 +114,7 @@ GPT/Gemini model details, API key entry, transcript polish, and voice output are
 AirTranslate does not ship with a backend account system.
 
 - Apple Mode uses macOS frameworks and locally managed Apple language assets.
-- OpenAI calls happen only when GPT mode is enabled.
+- OpenAI calls happen only when GPT Mode or the optional GPT Transcription mode is enabled.
 - Gemini calls happen only when Gemini Live mode is enabled.
 - OpenAI and Gemini API keys are never hardcoded, committed, or included in release packages.
 - Keys are saved in macOS Keychain with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`.
@@ -142,7 +153,7 @@ Download the latest open-source build from [GitHub Releases](https://github.com/
 AirTranslate remains fully open-source under the Apache-2.0 License. The DMG is provided only as a convenient macOS installer, while all source code, build scripts, release materials, LICENSE, and NOTICE files remain available in this repository.
 
 - [Download AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [Download AirTranslate-1.4.2.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.4.2.zip)
+- [Download AirTranslate-1.5.0.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.5.0.zip)
 - [Download AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [View version history](Release/VERSION-HISTORY.md)
 
