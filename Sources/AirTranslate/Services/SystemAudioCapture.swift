@@ -3,18 +3,87 @@ import CoreGraphics
 import ScreenCaptureKit
 
 protocol SystemAudioCaptureDelegate: AnyObject {
-    func systemAudioCapture(_ capture: SystemAudioCapture, didOutput sampleBuffer: CMSampleBuffer)
-    func systemAudioCapture(_ capture: SystemAudioCapture, didReceiveAudioSampleCount count: Int, level: Float?)
+    func systemAudioCapture(
+        _ capture: SystemAudioCapture,
+        didOutput sampleBuffer: CMSampleBuffer,
+        generation: UInt64
+    )
+    func systemAudioCapture(
+        _ capture: SystemAudioCapture,
+        didReceiveAudioSampleCount count: Int,
+        level: Float?,
+        generation: UInt64
+    )
+    func systemAudioCapture(
+        _ capture: SystemAudioCapture,
+        didFail error: Error,
+        generation: UInt64
+    )
+    func systemAudioCaptureDidStopByUser(
+        _ capture: SystemAudioCapture,
+        generation: UInt64
+    )
+}
+
+actor CaptureOperationGate {
+    private var isLocked = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func enter() async {
+        if !isLocked {
+            isLocked = true
+            return
+        }
+
+        await withCheckedContinuation { continuation in
+            waiters.append(continuation)
+        }
+    }
+
+    func leave() {
+        guard !waiters.isEmpty else {
+            isLocked = false
+            return
+        }
+
+        waiters.removeFirst().resume()
+    }
 }
 
 final class SystemAudioCapture: NSObject, @unchecked Sendable {
     private static let audioLevelReportInterval = 8
 
-    weak var delegate: SystemAudioCaptureDelegate?
+    static func isUserStoppedError(_ error: Error) -> Bool {
+        if error is SystemAudioCaptureLifecycleOutcome {
+            return true
+        }
+        let nsError = error as NSError
+        return nsError.domain == SCStreamErrorDomain
+            && nsError.code == SCStreamError.Code.userStopped.rawValue
+    }
 
-    private var stream: SCStream?
-    private var audioSampleCount = 0
+    static func isFatalStopError(_ error: Error) -> Bool {
+        !isUserStoppedError(error)
+    }
+
+    private struct ActiveStream {
+        let stream: SCStream
+        let generation: UInt64
+        var audioSampleCount: Int
+    }
+
+    private let stateLock = NSLock()
+    private let operationGate = CaptureOperationGate()
     private let sampleQueue = DispatchQueue(label: "AirTranslate.SystemAudioCapture.sampleQueue")
+    private weak var delegateStorage: SystemAudioCaptureDelegate?
+    private var operationGeneration: UInt64 = 0
+    private var userStoppedGeneration: UInt64?
+    private var activeStream: ActiveStream?
+
+    var delegate: SystemAudioCaptureDelegate? {
+        get { withStateLock { delegateStorage } }
+        set { withStateLock { delegateStorage = newValue } }
+    }
 
     @MainActor
     func requestScreenRecordingAccess() throws {
@@ -24,10 +93,43 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable {
     }
 
     @MainActor
-    func start(sampleRate: Int = 16_000) async throws {
-        await stop()
+    func start(sampleRate: Int = 16_000, generation: UInt64 = 0) async throws {
+        let operation = beginOperation()
+        await operationGate.enter()
 
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        do {
+            try await performStart(
+                sampleRate: sampleRate,
+                generation: generation,
+                operation: operation
+            )
+            await operationGate.leave()
+        } catch {
+            await operationGate.leave()
+            throw error
+        }
+    }
+
+    func stop() async {
+        invalidateOperations()
+        await operationGate.enter()
+        await performStop()
+        await operationGate.leave()
+    }
+
+    private func performStart(
+        sampleRate: Int,
+        generation: UInt64,
+        operation: UInt64
+    ) async throws {
+        await performStop()
+        try ensureOperationIsCurrent(operation)
+
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false,
+            onScreenWindowsOnly: true
+        )
+        try ensureOperationIsCurrent(operation)
 
         guard let display = content.displays.first else {
             throw CaptureError.noDisplay
@@ -43,33 +145,149 @@ final class SystemAudioCapture: NSObject, @unchecked Sendable {
         configuration.sampleRate = sampleRate
         configuration.channelCount = 1
 
-        let stream = SCStream(filter: filter, configuration: configuration, delegate: nil)
+        let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: sampleQueue)
         try stream.addStreamOutput(self, type: .audio, sampleHandlerQueue: sampleQueue)
-        try await stream.startCapture()
-        audioSampleCount = 0
-        self.stream = stream
+
+        let installed = withStateLock {
+            guard operationGeneration == operation else { return false }
+            activeStream = ActiveStream(
+                stream: stream,
+                generation: generation,
+                audioSampleCount: 0
+            )
+            return true
+        }
+        guard installed else {
+            removeOutputs(from: stream)
+            throw CancellationError()
+        }
+
+        do {
+            try await stream.startCapture()
+            let completion = withStateLock {
+                let stoppedByUser = userStoppedGeneration == generation
+                if stoppedByUser {
+                    userStoppedGeneration = nil
+                }
+                return (
+                    remainsCurrent: operationGeneration == operation && activeStream?.stream === stream,
+                    stoppedByUser: stoppedByUser
+                )
+            }
+            if completion.stoppedByUser {
+                throw SystemAudioCaptureLifecycleOutcome.userStopped
+            }
+            guard completion.remainsCurrent else {
+                await clearAndStop(stream)
+                throw CancellationError()
+            }
+        } catch {
+            let stoppedByUser = withStateLock {
+                guard userStoppedGeneration == generation else { return false }
+                userStoppedGeneration = nil
+                return true
+            }
+            await clearAndStop(stream)
+            if stoppedByUser || Self.isUserStoppedError(error) {
+                throw SystemAudioCaptureLifecycleOutcome.userStopped
+            }
+            throw error
+        }
     }
 
-    func stop() async {
+    private func performStop() async {
+        let stream = withStateLock {
+            let stream = activeStream?.stream
+            activeStream = nil
+            return stream
+        }
         guard let stream else { return }
+
+        removeOutputs(from: stream)
+        try? await stream.stopCapture()
+    }
+
+    private func clearAndStop(_ stream: SCStream) async {
+        withStateLock {
+            if activeStream?.stream === stream {
+                activeStream = nil
+            }
+        }
+        removeOutputs(from: stream)
+        try? await stream.stopCapture()
+    }
+
+    private func removeOutputs(from stream: SCStream) {
         try? stream.removeStreamOutput(self, type: .screen)
         try? stream.removeStreamOutput(self, type: .audio)
-        try? await stream.stopCapture()
-        self.stream = nil
+    }
+
+    private func beginOperation() -> UInt64 {
+        withStateLock {
+            operationGeneration &+= 1
+            userStoppedGeneration = nil
+            return operationGeneration
+        }
+    }
+
+    private func invalidateOperations() {
+        withStateLock {
+            operationGeneration &+= 1
+        }
+    }
+
+    private func ensureOperationIsCurrent(_ operation: UInt64) throws {
+        guard withStateLock({ operationGeneration == operation }) else {
+            throw CancellationError()
+        }
+    }
+
+    private func withStateLock<Result>(_ body: () -> Result) -> Result {
+        stateLock.lock()
+        defer { stateLock.unlock() }
+        return body()
     }
 }
 
 extension SystemAudioCapture: SCStreamOutput {
-    func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
+    func stream(
+        _ stream: SCStream,
+        didOutputSampleBuffer sampleBuffer: CMSampleBuffer,
+        of type: SCStreamOutputType
+    ) {
         guard type == .audio, sampleBuffer.isValid else { return }
-        audioSampleCount += 1
-        delegate?.systemAudioCapture(self, didOutput: sampleBuffer)
-        if audioSampleCount == 1 || audioSampleCount % Self.audioLevelReportInterval == 0 {
-            delegate?.systemAudioCapture(
+
+        let delivery = withStateLock {
+            guard var activeStream, activeStream.stream === stream else {
+                return (
+                    delegate: Optional<SystemAudioCaptureDelegate>.none,
+                    generation: UInt64.zero,
+                    count: 0
+                )
+            }
+
+            activeStream.audioSampleCount += 1
+            self.activeStream = activeStream
+            return (
+                delegate: delegateStorage,
+                generation: activeStream.generation,
+                count: activeStream.audioSampleCount
+            )
+        }
+        guard let delegate = delivery.delegate else { return }
+
+        delegate.systemAudioCapture(
+            self,
+            didOutput: sampleBuffer,
+            generation: delivery.generation
+        )
+        if delivery.count == 1 || delivery.count % Self.audioLevelReportInterval == 0 {
+            delegate.systemAudioCapture(
                 self,
-                didReceiveAudioSampleCount: audioSampleCount,
-                level: audioLevel(from: sampleBuffer)
+                didReceiveAudioSampleCount: delivery.count,
+                level: audioLevel(from: sampleBuffer),
+                generation: delivery.generation
             )
         }
     }
@@ -150,10 +368,51 @@ extension SystemAudioCapture: SCStreamOutput {
     }
 }
 
+extension SystemAudioCapture: SCStreamDelegate {
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        let didStopByUser = Self.isUserStoppedError(error)
+        let delivery = withStateLock {
+            guard let activeStream, activeStream.stream === stream else {
+                return (
+                    delegate: Optional<SystemAudioCaptureDelegate>.none,
+                    generation: UInt64.zero
+                )
+            }
+
+            operationGeneration &+= 1
+            if didStopByUser {
+                userStoppedGeneration = activeStream.generation
+            }
+            self.activeStream = nil
+            return (delegate: delegateStorage, generation: activeStream.generation)
+        }
+
+        removeOutputs(from: stream)
+        if didStopByUser {
+            delivery.delegate?.systemAudioCaptureDidStopByUser(
+                self,
+                generation: delivery.generation
+            )
+        } else {
+            delivery.delegate?.systemAudioCapture(
+                self,
+                didFail: error,
+                generation: delivery.generation
+            )
+        }
+    }
+}
+
+enum SystemAudioCaptureLifecycleOutcome: Error {
+    case userStopped
+}
+
 enum CaptureError: LocalizedError {
     case screenRecordingNotGranted
     case microphoneNotGranted
     case microphoneUnavailable
+    case microphoneInterrupted
+    case microphoneRuntimeFailure
     case noDisplay
 
     var errorDescription: String? {
@@ -164,6 +423,20 @@ enum CaptureError: LocalizedError {
             AppText.microphoneNotGranted
         case .microphoneUnavailable:
             AppText.microphoneUnavailable
+        case .microphoneInterrupted:
+            AppText.localized(
+                english: "Microphone capture was interrupted.",
+                korean: "마이크 캡처가 중단되었습니다.",
+                japanese: "マイクのキャプチャが中断されました。",
+                chineseSimplified: "麦克风捕获已中断。"
+            )
+        case .microphoneRuntimeFailure:
+            AppText.localized(
+                english: "Microphone capture stopped unexpectedly.",
+                korean: "마이크 캡처가 예기치 않게 중지되었습니다.",
+                japanese: "マイクのキャプチャが予期せず停止しました。",
+                chineseSimplified: "麦克风捕获意外停止。"
+            )
         case .noDisplay:
             AppText.noActiveDisplay
         }

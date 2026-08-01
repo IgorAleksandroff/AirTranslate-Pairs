@@ -95,14 +95,17 @@ struct MenuBarStatusView: View {
                 toggleCapture()
             } label: {
                 IconPanelButtonLabel(
-                    systemImage: session.isRunning ? "stop.fill" : "play.fill",
-                    title: session.isRunning ? AppText.stop : AppText.start,
-                    subtitle: session.isRunning ? AppText.menuBarRunningTitle : AppText.ready,
-                    accentColor: session.isRunning ? .red : .accentColor,
-                    isSelected: !session.isRunning
+                    systemImage: capturePhase.actionSystemImage,
+                    title: capturePhase.actionTitle,
+                    subtitle: capturePhase.actionSubtitle(statusMessage: session.statusMessage),
+                    accentColor: captureActionColor,
+                    isSelected: capturePhase == .idle
                 )
             }
             .buttonStyle(.plain)
+            .help(capturePhase.actionTitle)
+            .accessibilityLabel(capturePhase.actionTitle)
+            .accessibilityValue(capturePhase.actionSubtitle(statusMessage: session.statusMessage))
 
             if session.isRunning {
                 Button {
@@ -227,23 +230,44 @@ struct MenuBarStatusView: View {
     }
 
     private var statusSymbolName: String {
-        if session.isPaused {
-            return "pause.circle.fill"
+        switch capturePhase {
+        case .idle:
+            "captions.bubble.fill"
+        case .starting:
+            "hourglass.circle.fill"
+        case .running:
+            "waveform.circle.fill"
+        case .paused:
+            "pause.circle.fill"
         }
-        if session.isRunning {
-            return "waveform.circle.fill"
-        }
-        return "captions.bubble.fill"
     }
 
     private var statusColor: Color {
-        if session.isPaused {
-            return .orange
+        switch capturePhase {
+        case .idle:
+            .secondary
+        case .starting, .paused:
+            .orange
+        case .running:
+            .green
         }
-        if session.isRunning {
-            return .green
+    }
+
+    private var capturePhase: MenuBarCapturePhase {
+        MenuBarCapturePhase(
+            isRunning: session.isRunning,
+            isStarting: session.isStarting,
+            isPaused: session.isPaused
+        )
+    }
+
+    private var captureActionColor: Color {
+        switch capturePhase {
+        case .idle:
+            .accentColor
+        case .starting, .running, .paused:
+            .red
         }
-        return .secondary
     }
 
     private func toggleFloatingCaptions() {
@@ -252,7 +276,7 @@ struct MenuBarStatusView: View {
     }
 
     private func toggleCapture() {
-        if session.isRunning {
+        if capturePhase != .idle {
             session.stop()
         } else {
             session.start()
@@ -271,6 +295,58 @@ struct MenuBarStatusView: View {
             AppText.localized(english: "Both", korean: "원문+번역", japanese: "両方", chineseSimplified: "两者")
         case .translation:
             AppText.translationOnly
+        }
+    }
+}
+
+enum MenuBarCapturePhase: Equatable {
+    case idle
+    case starting
+    case running
+    case paused
+
+    init(isRunning: Bool, isStarting: Bool, isPaused: Bool) {
+        if isStarting {
+            self = .starting
+        } else if isRunning {
+            self = isPaused ? .paused : .running
+        } else {
+            self = .idle
+        }
+    }
+
+    var actionSystemImage: String {
+        switch self {
+        case .idle:
+            "play.fill"
+        case .starting:
+            "xmark"
+        case .running, .paused:
+            "stop.fill"
+        }
+    }
+
+    var actionTitle: String {
+        switch self {
+        case .idle:
+            AppText.start
+        case .starting:
+            AppText.cancel
+        case .running, .paused:
+            AppText.stop
+        }
+    }
+
+    func actionSubtitle(statusMessage: String) -> String {
+        switch self {
+        case .idle:
+            AppText.ready
+        case .starting:
+            statusMessage
+        case .running:
+            AppText.menuBarRunningTitle
+        case .paused:
+            AppText.paused
         }
     }
 }

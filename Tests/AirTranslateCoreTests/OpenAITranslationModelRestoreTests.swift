@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AirTranslate
 
-@Suite
+@Suite(.serialized)
 struct OpenAITranslationModelRestoreTests {
     private static let key = "openAITranslationModelID"
 

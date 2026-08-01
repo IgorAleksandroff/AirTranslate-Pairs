@@ -50,6 +50,190 @@ private struct PendingRecognizedCaption {
     let confidence: Double
 }
 
+struct StartConfiguration: Equatable {
+    let audioInputSource: AudioInputSource
+    let microphoneDeviceUniqueID: String?
+    let sourceLanguage: LanguageOption
+    let targetLanguage: LanguageOption
+    let selectedModel: IntelligenceModel
+    let openAITranscriptionModel: OpenAIRealtimeTranscriptionModel
+    let openAITranslationModel: OpenAIRealtimeTranslationModel
+    let geminiTranslationModel: GeminiTranslationModel
+    let usesAppleSourceAutoDetection: Bool
+
+    var isUsingGPTTranscriptionMode: Bool {
+        openAITranscriptionModel == .gptLiveTranscribe
+    }
+
+    var isTranscribeOnlyMode: Bool {
+        selectedModel == .appleSpeechOnly || isUsingGPTTranscriptionMode
+    }
+
+    var sampleRate: Int {
+        openAITranscriptionModel.isEnabled || openAITranslationModel.usesRealtimeAudioTranslation
+            ? 24_000
+            : 16_000
+    }
+}
+
+enum PipelineLifecyclePhase: Equatable {
+    case stopped
+    case starting
+    case running
+}
+
+enum PipelineStartValidation: Equatable {
+    case valid
+    case staleGeneration
+    case configurationChanged
+}
+
+struct PipelineLifecycleState {
+    private(set) var generation: UInt64 = 0
+    private(set) var phase = PipelineLifecyclePhase.stopped
+    private(set) var startConfiguration: StartConfiguration?
+
+    mutating func beginStart(configuration: StartConfiguration) -> UInt64 {
+        generation &+= 1
+        phase = .starting
+        startConfiguration = configuration
+        return generation
+    }
+
+    mutating func validateStart(
+        generation expectedGeneration: UInt64,
+        currentConfiguration: StartConfiguration
+    ) -> PipelineStartValidation {
+        guard generation == expectedGeneration, phase == .starting else {
+            return .staleGeneration
+        }
+        guard startConfiguration == currentConfiguration else {
+            generation &+= 1
+            phase = .stopped
+            startConfiguration = nil
+            return .configurationChanged
+        }
+        return .valid
+    }
+
+    mutating func markRunning(
+        generation expectedGeneration: UInt64,
+        currentConfiguration: StartConfiguration
+    ) -> PipelineStartValidation {
+        let validation = validateStart(
+            generation: expectedGeneration,
+            currentConfiguration: currentConfiguration
+        )
+        if validation == .valid {
+            phase = .running
+        }
+        return validation
+    }
+
+    mutating func fail(generation expectedGeneration: UInt64) -> Bool {
+        guard generation == expectedGeneration, phase != .stopped else {
+            return false
+        }
+        stop()
+        return true
+    }
+
+    mutating func failCurrent() -> Bool {
+        guard phase != .stopped else { return false }
+        stop()
+        return true
+    }
+
+    mutating func stop() {
+        generation &+= 1
+        phase = .stopped
+        startConfiguration = nil
+    }
+
+    func acceptsSample(generation expectedGeneration: UInt64) -> Bool {
+        generation == expectedGeneration && phase == .running
+    }
+
+    func isActive(generation expectedGeneration: UInt64) -> Bool {
+        generation == expectedGeneration && phase != .stopped
+    }
+}
+
+private enum PipelineStartError: LocalizedError {
+    case configurationChanged
+
+    var errorDescription: String? {
+        switch self {
+        case .configurationChanged:
+            AppText.localized(
+                english: "Capture settings changed while starting. Start again.",
+                korean: "시작하는 동안 캡처 설정이 변경되었습니다. 다시 시작해 주세요.",
+                japanese: "開始中にキャプチャ設定が変更されました。もう一度開始してください。",
+                chineseSimplified: "启动期间捕获设置已更改。请重新启动。"
+            )
+        }
+    }
+}
+
+private struct RealtimeAudioTransportError: LocalizedError {
+    let degradation: RealtimeAudioTransportDegradation
+
+    var errorDescription: String? {
+        AppText.localized(
+            english: "Realtime audio could not keep up, so capture was stopped to avoid missing captions.",
+            korean: "실시간 오디오 전송이 입력을 따라가지 못해 자막 누락을 막기 위해 캡처를 중지했습니다.",
+            japanese: "リアルタイム音声転送が入力に追いつかなかったため、字幕の欠落を防ぐためにキャプチャを停止しました。",
+            chineseSimplified: "实时音频传输无法跟上输入，已停止捕获以避免字幕缺失。"
+        )
+    }
+}
+
+private final class AudioSamplePipelineRegistry: @unchecked Sendable {
+    private struct Pipeline {
+        let generation: UInt64
+        let transcriber: LiveSpeechTranscriber
+        let openAITranscriber: OpenAIRealtimeTranscriber
+        let geminiLiveTranslator: GeminiLiveTranslationService
+    }
+
+    private let lock = NSLock()
+    private var pipeline: Pipeline?
+
+    func publish(
+        generation: UInt64,
+        transcriber: LiveSpeechTranscriber,
+        openAITranscriber: OpenAIRealtimeTranscriber,
+        geminiLiveTranslator: GeminiLiveTranslationService
+    ) {
+        lock.lock()
+        pipeline = Pipeline(
+            generation: generation,
+            transcriber: transcriber,
+            openAITranscriber: openAITranscriber,
+            geminiLiveTranslator: geminiLiveTranslator
+        )
+        lock.unlock()
+    }
+
+    func clear() {
+        lock.lock()
+        pipeline = nil
+        lock.unlock()
+    }
+
+    func append(_ sampleBuffer: CMSampleBuffer, generation: UInt64) {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let pipeline, pipeline.generation == generation else { return }
+
+        // clear() waits for any in-flight append to finish before the MainActor
+        // stops or replaces these backends.
+        pipeline.transcriber.append(sampleBuffer)
+        pipeline.openAITranscriber.append(sampleBuffer)
+        pipeline.geminiLiveTranslator.append(sampleBuffer)
+    }
+}
+
 struct AutoDetectionLanguageChangeConfirmation: Equatable {
     let currentLanguage: LanguageOption
     let detectedLanguage: LanguageOption
@@ -269,10 +453,11 @@ final class TranslationSessionStore {
     )
 
     private let systemAudioCapture = SystemAudioCapture()
-    private var microphoneAudioCapture = MicrophoneAudioCapture()
-    @ObservationIgnored nonisolated(unsafe) private var transcriber = LiveSpeechTranscriber()
-    @ObservationIgnored nonisolated(unsafe) private var openAITranscriber = OpenAIRealtimeTranscriber()
-    @ObservationIgnored nonisolated(unsafe) private var geminiLiveTranslator = GeminiLiveTranslationService()
+    private let microphoneAudioCapture = MicrophoneAudioCapture()
+    @ObservationIgnored private var transcriber = LiveSpeechTranscriber()
+    @ObservationIgnored private var openAITranscriber = OpenAIRealtimeTranscriber()
+    @ObservationIgnored private var geminiLiveTranslator = GeminiLiveTranslationService()
+    @ObservationIgnored nonisolated private let audioSamplePipelineRegistry = AudioSamplePipelineRegistry()
     private let translator = AppleTranslationService()
     private let openAITranslator = OpenAITranslationService()
     private let foundationTranscriptPolisher = FoundationTranscriptPolisher()
@@ -282,6 +467,9 @@ final class TranslationSessionStore {
     private let spellDocumentTag = NSSpellChecker.uniqueSpellDocumentTag()
     private let modelAvailabilityProvider: (LanguageOption, LanguageOption) async -> [String: ModelAvailability]
     private let modelAssetDownloader: (IntelligenceModel, LanguageOption, LanguageOption) async throws -> Void
+    private let translationSessionPreparer: (
+        @Sendable (LanguageOption, LanguageOption, IntelligenceModel) async throws -> Void
+    )?
     private let transcriptsDirectoryOverride: URL?
     private var audioSampleCount = 0
     private var lastRecognizedText = ""
@@ -298,6 +486,8 @@ final class TranslationSessionStore {
     private var transcriptCleanupTask: Task<Void, Never>?
     private var translationTask: Task<Void, Never>?
     private var translationTaskGeneration = 0
+    private var translationSessionWarmupTask: Task<Void, Never>?
+    private var translationSessionWarmupGeneration: UInt64?
     private var latestTranslationRequest: TranslationRequest?
     private var translationBurstStartedAt = Date.distantPast
     private var committedSourceText = ""
@@ -338,7 +528,13 @@ final class TranslationSessionStore {
     private var toastDismissTask: Task<Void, Never>?
     private var transcribeOnlyNoticeDismissTask: Task<Void, Never>?
     private var captureStartTask: Task<Void, Never>?
+    private var activeCaptureStartGeneration: UInt64?
+#if DEBUG
+    private var permissionSuspendedStartContinuations: [UInt64: CheckedContinuation<Void, Never>] = [:]
+#endif
     private var captureStopTask: Task<Void, Never>?
+    private var pipelineLifecycle = PipelineLifecycleState()
+    private var activeCaptionerGeneration: UInt64?
     private var dubbingSpeechProgress = DubbingSpeechProgress()
     private var hasShownTranscribeOnlyNoticeForCurrentActivation = false
     private var floatingCaptionDisplayModeBeforeTranscribeOnly: FloatingCaptionDisplayMode?
@@ -360,7 +556,11 @@ final class TranslationSessionStore {
     }
 
     var isUsingOpenAIRealtime: Bool {
-        openAITranslationModel.isSupportedLiveTranslationModel
+        openAITranscriptionModel.isEnabled || openAITranslationModel.isSupportedLiveTranslationModel
+    }
+
+    var isUsingGPTTranscriptionMode: Bool {
+        openAITranscriptionModel == .gptLiveTranscribe
     }
 
     var isUsingOpenAIRealtimeTranslation: Bool {
@@ -376,7 +576,7 @@ final class TranslationSessionStore {
     }
 
     var isTranscribeOnlyMode: Bool {
-        selectedModel == .appleSpeechOnly
+        selectedModel == .appleSpeechOnly || isUsingGPTTranscriptionMode
     }
 
     var liveOutputMode: LiveOutputMode {
@@ -401,11 +601,15 @@ final class TranslationSessionStore {
         modelAssetDownloader: @escaping (IntelligenceModel, LanguageOption, LanguageOption) async throws -> Void = { model, source, target in
             try await ModelAvailabilityChecker.downloadAssets(for: model, source: source, target: target)
         },
+        translationSessionPreparer: (
+            @Sendable (LanguageOption, LanguageOption, IntelligenceModel) async throws -> Void
+        )? = nil,
         transcriptsDirectoryURL: URL? = nil,
         transcriptCheckpointInterval: TimeInterval = TranslationSessionStore.defaultTranscriptCheckpointInterval
     ) {
         self.modelAvailabilityProvider = modelAvailabilityProvider
         self.modelAssetDownloader = modelAssetDownloader
+        self.translationSessionPreparer = translationSessionPreparer
         self.transcriptsDirectoryOverride = transcriptsDirectoryURL
         self.transcriptCheckpointInterval = transcriptCheckpointInterval
         restoreSelectedSettings()
@@ -473,72 +677,111 @@ final class TranslationSessionStore {
             return
         }
 
+        invalidateCaptureStartAttempt()
+        let configuration = currentStartConfiguration()
+        let generation = pipelineLifecycle.beginStart(configuration: configuration)
+        activeCaptureStartGeneration = generation
         isPaused = false
         setCaptionersPaused(false)
         isStarting = true
-        captureStartTask?.cancel()
-        statusMessage = audioInputSource == .microphone
+        statusMessage = configuration.audioInputSource == .microphone
             ? AppText.checkingMicrophonePermission
             : AppText.checkingScreenPermission
 
-        captureStartTask = Task { @MainActor in
+        captureStartTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.completeCaptureStartAttempt(generation: generation) }
             do {
                 if let captureStopTask {
                     await captureStopTask.value
                     self.captureStopTask = nil
                 }
-                guard !Task.isCancelled, isStarting else { return }
-                if audioInputSource == .systemAudio {
+                try validatePipelineStart(generation: generation, configuration: configuration)
+                if configuration.audioInputSource == .systemAudio {
                     try systemAudioCapture.requestScreenRecordingAccess()
                 }
-                guard !Task.isCancelled, isStarting else { return }
-                statusMessage = isUsingGeminiTranslation
-                    ? AppText.connectingGeminiLiveTranslation
-                    : AppText.checkingSpeechPermission
-                try await startCaptioners()
-                guard !Task.isCancelled, isStarting else {
-                    stopCaptioners()
-                    return
+                try validatePipelineStart(generation: generation, configuration: configuration)
+                if configuration.isUsingGPTTranscriptionMode {
+                    statusMessage = AppText.connectingGPTTranscription
+                } else if configuration.geminiTranslationModel.isEnabled {
+                    statusMessage = AppText.connectingGeminiLiveTranslation
+                } else {
+                    statusMessage = AppText.checkingSpeechPermission
                 }
-                statusMessage = AppText.startingCapture(for: audioInputSource)
-                let usesOpenAIRealtimeAudio = openAITranscriptionModel.isEnabled
-                    || openAITranslationModel.usesRealtimeAudioTranslation
-                let sampleRate = usesOpenAIRealtimeAudio ? 24_000 : 16_000
-                switch audioInputSource {
+                try await startCaptioners(
+                    configuration: configuration,
+                    generation: generation
+                )
+                try validatePipelineStart(generation: generation, configuration: configuration)
+                audioSamplePipelineRegistry.publish(
+                    generation: generation,
+                    transcriber: transcriber,
+                    openAITranscriber: openAITranscriber,
+                    geminiLiveTranslator: geminiLiveTranslator
+                )
+
+                statusMessage = AppText.startingCapture(for: configuration.audioInputSource)
+                switch configuration.audioInputSource {
                 case .systemAudio:
-                    try await systemAudioCapture.start(sampleRate: sampleRate)
+                    try await systemAudioCapture.start(
+                        sampleRate: configuration.sampleRate,
+                        generation: generation
+                    )
                 case .microphone:
                     try await microphoneAudioCapture.start(
-                        sampleRate: sampleRate,
-                        deviceUniqueID: selectedMicrophoneDevice.uniqueID
+                        sampleRate: configuration.sampleRate,
+                        deviceUniqueID: configuration.microphoneDeviceUniqueID,
+                        generation: generation
                     )
                 }
-                guard !Task.isCancelled, isStarting else {
-                    await stopCapture()
-                    stopCaptioners()
-                    return
+                try validatePipelineStart(generation: generation, configuration: configuration)
+                let promotion = pipelineLifecycle.markRunning(
+                    generation: generation,
+                    currentConfiguration: currentStartConfiguration()
+                )
+                switch promotion {
+                case .valid:
+                    break
+                case .configurationChanged:
+                    throw PipelineStartError.configurationChanged
+                case .staleGeneration:
+                    throw CancellationError()
                 }
                 resetLiveSessionState(clearsVisibleLines: true)
                 isRunning = true
                 isStarting = false
-                statusMessage = AppText.listeningForSpeech(from: audioInputSource)
+                statusMessage = AppText.listeningForSpeech(from: configuration.audioInputSource)
                 warmTranslationSession()
-            } catch {
-                guard !Task.isCancelled else { return }
+            } catch let error as CancellationError {
+                await handleCancelledCaptureStart(
+                    generation: generation,
+                    error: error
+                )
+            } catch let error as PipelineStartError {
                 isStarting = false
                 isRunning = false
                 stopCaptioners()
                 await stopCapture()
                 statusMessage = AppText.startFailed(error.localizedDescription)
+            } catch {
+                await handleCaptureStartFailure(
+                    error,
+                    generation: generation,
+                    configuration: configuration
+                )
             }
         }
     }
 
     func stop() {
         guard isRunning || isStarting else { return }
+        pipelineLifecycle.stop()
+        finishPipeline(statusOverride: nil)
+    }
 
-        captureStartTask?.cancel()
-        captureStartTask = nil
+    private func finishPipeline(statusOverride: String?) {
+        invalidateCaptureStartAttempt()
+        cancelTranslationSessionWarmup()
         autoStartAfterModelAssetDownloadTask?.cancel()
         autoStartAfterModelAssetDownloadTask = nil
         transcriptCheckpointTask?.cancel()
@@ -553,7 +796,9 @@ final class TranslationSessionStore {
         setCaptionersPaused(false)
         isStarting = false
         isRunning = false
-        if didSaveTranscript {
+        if let statusOverride {
+            statusMessage = statusOverride
+        } else if didSaveTranscript {
             statusMessage = AppText.transcriptSavedToast
         } else if !hadTranscriptToSave {
             statusMessage = AppText.stopped
@@ -563,9 +808,136 @@ final class TranslationSessionStore {
             showToast(AppText.transcriptSavedToast)
         }
 
+        let previousStopTask = captureStopTask
         captureStopTask = Task { @MainActor in
+            if let previousStopTask {
+                await previousStopTask.value
+            }
             await stopCapture()
         }
+    }
+
+    private func invalidateCaptureStartAttempt() {
+        activeCaptureStartGeneration = nil
+        captureStartTask?.cancel()
+        captureStartTask = nil
+    }
+
+    private func completeCaptureStartAttempt(generation: UInt64) {
+        guard activeCaptureStartGeneration == generation else { return }
+        activeCaptureStartGeneration = nil
+        captureStartTask = nil
+        if !isRunning {
+            isStarting = false
+        }
+    }
+
+    private func handleCancelledCaptureStart(
+        generation: UInt64,
+        error: Error
+    ) async {
+        guard pipelineLifecycle.fail(generation: generation) else {
+            // stop() may have invalidated this task while a permission prompt
+            // was suspended. It must not affect a newer generation, but it can
+            // still have resumed and initialized the old captioners.
+            stopCaptionersIfOwned(by: generation)
+            return
+        }
+
+        isStarting = false
+        isRunning = false
+        stopCaptioners()
+        await stopCapture()
+        statusMessage = AppText.startFailed(error.localizedDescription)
+    }
+
+    private func stopCaptionersIfOwned(by generation: UInt64) {
+        guard activeCaptionerGeneration == generation else { return }
+        stopCaptioners()
+    }
+
+    private func currentStartConfiguration() -> StartConfiguration {
+        StartConfiguration(
+            audioInputSource: audioInputSource,
+            microphoneDeviceUniqueID: selectedMicrophoneDevice.uniqueID,
+            sourceLanguage: sourceLanguage,
+            targetLanguage: targetLanguage,
+            selectedModel: selectedModel,
+            openAITranscriptionModel: openAITranscriptionModel,
+            openAITranslationModel: openAITranslationModel,
+            geminiTranslationModel: geminiTranslationModel,
+            usesAppleSourceAutoDetection: isUsingAppleSourceAutoDetection
+        )
+    }
+
+    private func validatePipelineStart(
+        generation: UInt64,
+        configuration: StartConfiguration
+    ) throws {
+        guard !Task.isCancelled, isStarting else {
+            throw CancellationError()
+        }
+
+        switch pipelineLifecycle.validateStart(
+            generation: generation,
+            currentConfiguration: currentStartConfiguration()
+        ) {
+        case .valid:
+            guard configuration == currentStartConfiguration() else {
+                throw PipelineStartError.configurationChanged
+            }
+        case .staleGeneration:
+            throw CancellationError()
+        case .configurationChanged:
+            throw PipelineStartError.configurationChanged
+        }
+    }
+
+    private func handleFatalPipelineError(
+        _ error: Error,
+        generation: UInt64? = nil
+    ) {
+        let didEndLifecycle: Bool
+        if let generation {
+            didEndLifecycle = pipelineLifecycle.fail(generation: generation)
+        } else {
+            didEndLifecycle = pipelineLifecycle.failCurrent()
+        }
+        guard didEndLifecycle, isRunning || isStarting else { return }
+
+        finishPipeline(statusOverride: error.localizedDescription)
+    }
+
+    private func handleSystemAudioCaptureStoppedByUser(generation: UInt64) {
+        guard pipelineLifecycle.fail(generation: generation),
+              isRunning || isStarting
+        else {
+            return
+        }
+
+        finishPipeline(statusOverride: nil)
+    }
+
+    private func handleCaptureStartFailure(
+        _ error: Error,
+        generation: UInt64,
+        configuration: StartConfiguration
+    ) async {
+        if configuration.audioInputSource == .systemAudio,
+           SystemAudioCapture.isUserStoppedError(error) {
+            handleSystemAudioCaptureStoppedByUser(generation: generation)
+            return
+        }
+
+        guard pipelineLifecycle.fail(generation: generation) else {
+            // A capture/provider callback already ended this generation.
+            return
+        }
+        isStarting = false
+        isRunning = false
+        stopCaptioners()
+        await stopCapture()
+        statusMessage = AppText.startFailed(error.localizedDescription)
     }
 
     func startReadinessAssessment() -> StartReadinessAssessment {
@@ -681,6 +1053,7 @@ final class TranslationSessionStore {
 
     func prepareForTermination() {
         autoStartAfterModelAssetDownloadTask?.cancel()
+        cancelTranslationSessionWarmup()
         transcriptCheckpointTask?.cancel()
         transcriptCheckpointTask = nil
         flushPendingRecognizedCaption()
@@ -863,6 +1236,22 @@ final class TranslationSessionStore {
         usePreferredLanguageForOpenAIOutput()
     }
 
+    func useGPTTranscriptionMode() {
+        if floatingCaptionDisplayModeBeforeTranscribeOnly == nil {
+            floatingCaptionDisplayModeBeforeTranscribeOnly = floatingCaptionDisplayMode
+        }
+        selectedModel = .appleSpeechOnly
+        geminiTranslationModel = .off
+        openAITranslationModel = .off
+        if openAITranscriptionModel != .gptLiveTranscribe {
+            openAITranscriptionModel = .gptLiveTranscribe
+        }
+        isTranscriptLintEnabled = false
+        floatingCaptionDisplayMode = .original
+        isDubbingEnabled = false
+        clearTranscribeOnlyNotice(resetActivation: true)
+    }
+
     func useGeminiTranslationMode() {
         clearTranscribeOnlyNotice(resetActivation: true)
         selectedModel = .appleSystem
@@ -886,7 +1275,7 @@ final class TranslationSessionStore {
 
     func useTranslationMode() {
         clearTranscribeOnlyNotice(resetActivation: true)
-        if selectedModel == .appleSpeechOnly {
+        if isTranscribeOnlyMode {
             selectedModel = .appleSystem
         }
         if openAITranscriptionModel.isEnabled || openAITranslationModel.isEnabled {
@@ -1302,40 +1691,122 @@ final class TranslationSessionStore {
         }
     }
 
-    private func startCaptioners() async throws {
+    private func startCaptioners(
+        configuration: StartConfiguration,
+        generation: UInt64
+    ) async throws {
+        if usesAppleSpeechTranscriber(for: configuration) {
+            try await startAppleSpeechTranscriber(
+                configuration: configuration,
+                generation: generation
+            )
+            return
+        }
+
         stopCaptioners()
         transcriber = LiveSpeechTranscriber()
         transcriber.delegate = self
         openAITranscriber = OpenAIRealtimeTranscriber()
         openAITranscriber.delegate = self
+        openAITranscriber.onAudioTransportDegraded = { [weak self, weak openAITranscriber] degradation in
+            Task { @MainActor in
+                guard let self,
+                      let openAITranscriber,
+                      openAITranscriber === self.openAITranscriber
+                else {
+                    return
+                }
+                self.handleFatalPipelineError(
+                    RealtimeAudioTransportError(degradation: degradation),
+                    generation: generation
+                )
+            }
+        }
         geminiLiveTranslator = GeminiLiveTranslationService()
         geminiLiveTranslator.delegate = self
+        geminiLiveTranslator.onAudioTransportDegraded = { [weak self, weak geminiLiveTranslator] degradation in
+            Task { @MainActor in
+                guard let self,
+                      let geminiLiveTranslator,
+                      geminiLiveTranslator === self.geminiLiveTranslator
+                else {
+                    return
+                }
+                self.handleFatalPipelineError(
+                    RealtimeAudioTransportError(degradation: degradation),
+                    generation: generation
+                )
+            }
+        }
+        activeCaptionerGeneration = generation
 
-        if isTranscribeOnlyMode, openAITranscriptionModel.isEnabled {
-            try await openAITranscriber.start(language: sourceLanguage, model: openAITranscriptionModel)
-        } else if isTranscribeOnlyMode {
-            try await transcriber.start(languages: await appleSpeechLanguagesForCurrentMode())
-        } else if geminiTranslationModel.isEnabled {
-            try await geminiLiveTranslator.start(targetLanguage: targetLanguage, model: geminiTranslationModel)
-        } else if openAITranslationModel.usesRealtimeAudioTranslation {
-            try await openAITranscriber.startRealtimeTranslationOnly(
-                language: targetLanguage,
-                model: openAITranslationModel
+        if configuration.isTranscribeOnlyMode, configuration.openAITranscriptionModel.isEnabled {
+            try await openAITranscriber.start(
+                language: configuration.sourceLanguage,
+                model: configuration.openAITranscriptionModel
             )
-        } else if openAITranscriptionModel.isEnabled {
-            try await openAITranscriber.start(language: sourceLanguage, model: openAITranscriptionModel)
-        } else {
-            try await transcriber.start(languages: await appleSpeechLanguagesForCurrentMode())
+        } else if configuration.geminiTranslationModel.isEnabled {
+            try await geminiLiveTranslator.start(
+                targetLanguage: configuration.targetLanguage,
+                model: configuration.geminiTranslationModel
+            )
+        } else if configuration.openAITranslationModel.usesRealtimeAudioTranslation {
+            try await openAITranscriber.startRealtimeTranslationOnly(
+                language: configuration.targetLanguage,
+                model: configuration.openAITranslationModel
+            )
+        } else if configuration.openAITranscriptionModel.isEnabled {
+            try await openAITranscriber.start(
+                language: configuration.sourceLanguage,
+                model: configuration.openAITranscriptionModel
+            )
         }
     }
 
-    private func appleSpeechLanguagesForCurrentMode() async -> [LanguageOption] {
-        guard isUsingAppleSourceAutoDetection else { return [sourceLanguage] }
+    private func usesAppleSpeechTranscriber(for configuration: StartConfiguration) -> Bool {
+        !configuration.openAITranscriptionModel.isEnabled
+            && !configuration.geminiTranslationModel.isEnabled
+            && !configuration.openAITranslationModel.usesRealtimeAudioTranslation
+    }
 
-        let candidates = prioritizedAutoDetectionLanguages()
+    private func startAppleSpeechTranscriber(
+        configuration: StartConfiguration,
+        generation: UInt64
+    ) async throws {
+        // Keep this candidate entirely local until all cancellation and
+        // generation checks pass. A non-cooperative speech-permission callback
+        // from an older start must never replace or stop a newer pipeline.
+        let candidate = LiveSpeechTranscriber()
+        candidate.delegate = self
+        do {
+            let languages = await appleSpeechLanguages(for: configuration)
+            try Task.checkCancellation()
+            try await candidate.start(languages: languages)
+            try validatePipelineStart(generation: generation, configuration: configuration)
+
+            stopCaptioners()
+            transcriber = candidate
+            transcriber.delegate = self
+            activeCaptionerGeneration = generation
+        } catch {
+            candidate.delegate = nil
+            candidate.stop()
+            throw error
+        }
+    }
+
+    private func appleSpeechLanguages(for configuration: StartConfiguration) async -> [LanguageOption] {
+        guard configuration.usesAppleSourceAutoDetection else {
+            return [configuration.sourceLanguage]
+        }
+
+        let candidates = LanguageOption.prioritizedAutoDetectionCandidates(
+            sourceLanguage: configuration.sourceLanguage,
+            targetLanguage: configuration.targetLanguage
+        )
         let installedCandidates = await LiveSpeechTranscriber.installedSupportedLanguages(from: candidates)
         let selectedCandidates = installedCandidates.isEmpty
-            ? [candidates.first ?? sourceLanguage]
+            ? [candidates.first ?? configuration.sourceLanguage]
             : installedCandidates
         appleAutoDetectionPreferredLanguage = selectedCandidates.first
         return selectedCandidates
@@ -1349,6 +1820,10 @@ final class TranslationSessionStore {
     }
 
     private func stopCaptioners() {
+        audioSamplePipelineRegistry.clear()
+        activeCaptionerGeneration = nil
+        openAITranscriber.onAudioTransportDegraded = nil
+        geminiLiveTranslator.onAudioTransportDegraded = nil
         transcriber.delegate = nil
         openAITranscriber.delegate = nil
         geminiLiveTranslator.delegate = nil
@@ -1455,23 +1930,54 @@ final class TranslationSessionStore {
     }
 
     private func warmTranslationSession() {
+        cancelTranslationSessionWarmup()
         guard !openAITranslationModel.isEnabled, !geminiTranslationModel.isEnabled else { return }
 
         let warmSourceLanguage = sourceLanguage
         let warmTargetLanguage = targetLanguage
         let warmSelectedModel = selectedModel
+        let warmGeneration = pipelineLifecycle.generation
+        let warmConfiguration = currentStartConfiguration()
 
-        Task { @MainActor in
+        translationSessionWarmupGeneration = warmGeneration
+        translationSessionWarmupTask = Task { @MainActor [weak self] in
+            guard let self else { return }
             do {
-                try await translator.prepare(
-                    source: warmSourceLanguage,
-                    target: warmTargetLanguage,
-                    model: warmSelectedModel
-                )
+                if let translationSessionPreparer {
+                    try await translationSessionPreparer(
+                        warmSourceLanguage,
+                        warmTargetLanguage,
+                        warmSelectedModel
+                    )
+                } else {
+                    try await translator.prepare(
+                        source: warmSourceLanguage,
+                        target: warmTargetLanguage,
+                        model: warmSelectedModel
+                    )
+                }
             } catch {
+                guard !Task.isCancelled,
+                      translationSessionWarmupGeneration == warmGeneration,
+                      pipelineLifecycle.acceptsSample(generation: warmGeneration),
+                      currentStartConfiguration() == warmConfiguration
+                else {
+                    return
+                }
                 statusMessage = error.localizedDescription
             }
+
+            if translationSessionWarmupGeneration == warmGeneration {
+                translationSessionWarmupTask = nil
+                translationSessionWarmupGeneration = nil
+            }
         }
+    }
+
+    private func cancelTranslationSessionWarmup() {
+        translationSessionWarmupTask?.cancel()
+        translationSessionWarmupTask = nil
+        translationSessionWarmupGeneration = nil
     }
 
     func refreshModelAvailability() {
@@ -1582,13 +2088,26 @@ final class TranslationSessionStore {
         isAppleSourceAutoDetectionEnabled = isAppleSourceAutoDetectionAvailable
             && defaults.bool(forKey: SettingsKey.isAppleSourceAutoDetectionEnabled)
         refreshMicrophoneInputDevices()
-        if openAITranscriptionModel.isEnabled || openAITranslationModel.isEnabled {
+        let restoredGPTTranscriptionMode =
+            defaults.string(forKey: SettingsKey.openAITranscriptionModelID)
+            == OpenAIRealtimeTranscriptionModel.gptLiveTranscribe.rawValue
+        if restoredGPTTranscriptionMode {
+            selectedModel = .appleSpeechOnly
+            openAITranslationModel = .off
+            geminiTranslationModel = .off
+            openAITranscriptionModel = .gptLiveTranscribe
+            floatingCaptionDisplayMode = .original
+            isDubbingEnabled = false
+        } else if openAITranslationModel.isEnabled {
             openAITranscriptionModel = .off
-            if !openAITranslationModel.isEnabled {
-                openAITranslationModel = .gptRealtimeTranslate
-            }
+        } else if openAITranscriptionModel == .gptRealtimeWhisper {
+            openAITranscriptionModel = .off
         }
-        applyRestoredVoiceOutputPreference()
+        if restoredGPTTranscriptionMode {
+            applyVoiceOutputDefault(false)
+        } else {
+            applyRestoredVoiceOutputPreference()
+        }
     }
 
     private func persistSelectedSettings() {
@@ -1620,10 +2139,7 @@ final class TranslationSessionStore {
 
     private func stopCapture() async {
         await systemAudioCapture.stop()
-        microphoneAudioCapture.delegate = nil
-        microphoneAudioCapture.stop()
-        microphoneAudioCapture = MicrophoneAudioCapture()
-        microphoneAudioCapture.delegate = self
+        await microphoneAudioCapture.stop()
     }
 
     private func floatingCaptionText(from text: String?) -> String {
@@ -3693,17 +4209,189 @@ final class TranslationSessionStore {
     private static func clampedVolume(_ volume: Double, minimum: Double = 0) -> Double {
         min(max(volume, minimum), 1)
     }
+
+    private func activeGeneration(
+        for transcriber: LiveSpeechTranscriber,
+        requiresRunning: Bool
+    ) -> UInt64? {
+        guard let generation = activeCaptionerGeneration else {
+            // Presentation-policy tests and preview harnesses can intentionally
+            // drive the delegate while manually owning `isRunning`. Production
+            // starts always publish a captioner generation before setting it.
+            guard requiresRunning,
+                  isRunning,
+                  pipelineLifecycle.phase == .stopped
+            else {
+                return nil
+            }
+            return pipelineLifecycle.generation
+        }
+        let isCurrentProducer = transcriber === self.transcriber
+            || openAITranscriber.ownsDelegateProxy(transcriber)
+        guard isCurrentProducer else { return nil }
+        if requiresRunning {
+            return pipelineLifecycle.acceptsSample(generation: generation) ? generation : nil
+        }
+        return pipelineLifecycle.isActive(generation: generation) ? generation : nil
+    }
+
+    private func activeGeneration(
+        for service: GeminiLiveTranslationService,
+        requiresRunning: Bool
+    ) -> UInt64? {
+        guard let generation = activeCaptionerGeneration else {
+            guard requiresRunning,
+                  isRunning,
+                  pipelineLifecycle.phase == .stopped
+            else {
+                return nil
+            }
+            return pipelineLifecycle.generation
+        }
+        guard service === geminiLiveTranslator else {
+            return nil
+        }
+        if requiresRunning {
+            return pipelineLifecycle.acceptsSample(generation: generation) ? generation : nil
+        }
+        return pipelineLifecycle.isActive(generation: generation) ? generation : nil
+    }
+
+#if DEBUG
+    func beginPermissionSuspendedStartForTesting() -> UInt64? {
+        guard !isRunning, !isStarting else { return nil }
+
+        invalidateCaptureStartAttempt()
+        let configuration = currentStartConfiguration()
+        let generation = pipelineLifecycle.beginStart(configuration: configuration)
+        activeCaptureStartGeneration = generation
+        isStarting = true
+        statusMessage = AppText.checkingSpeechPermission
+        captureStartTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.completeCaptureStartAttempt(generation: generation) }
+            do {
+                await withCheckedContinuation { continuation in
+                    self.permissionSuspendedStartContinuations[generation] = continuation
+                }
+                self.permissionSuspendedStartContinuations[generation] = nil
+                try self.validatePipelineStart(
+                    generation: generation,
+                    configuration: configuration
+                )
+            } catch let error as CancellationError {
+                await self.handleCancelledCaptureStart(
+                    generation: generation,
+                    error: error
+                )
+            } catch {
+                guard self.pipelineLifecycle.fail(generation: generation) else { return }
+                self.isStarting = false
+                self.isRunning = false
+                self.stopCaptioners()
+                await self.stopCapture()
+                self.statusMessage = AppText.startFailed(error.localizedDescription)
+            }
+        }
+        return generation
+    }
+
+    func resumePermissionSuspendedStartForTesting() {
+        guard permissionSuspendedStartContinuations.count == 1,
+              let generation = permissionSuspendedStartContinuations.keys.first
+        else {
+            return
+        }
+        resumePermissionSuspendedStartForTesting(generation: generation)
+    }
+
+    func resumePermissionSuspendedStartForTesting(generation: UInt64) {
+        let continuation = permissionSuspendedStartContinuations.removeValue(forKey: generation)
+        continuation?.resume()
+    }
+
+    var isPermissionSuspendedStartForTesting: Bool {
+        !permissionSuspendedStartContinuations.isEmpty
+    }
+
+    func isPermissionSuspendedStartForTesting(generation: UInt64) -> Bool {
+        permissionSuspendedStartContinuations[generation] != nil
+    }
+
+    func activateLiveCallbackPipelineForTesting() -> (
+        generation: UInt64,
+        transcriber: LiveSpeechTranscriber,
+        openAITranscriber: OpenAIRealtimeTranscriber
+    ) {
+        pipelineLifecycle.stop()
+        stopCaptioners()
+
+        let configuration = currentStartConfiguration()
+        let generation = pipelineLifecycle.beginStart(configuration: configuration)
+        transcriber = LiveSpeechTranscriber()
+        transcriber.delegate = self
+        openAITranscriber = OpenAIRealtimeTranscriber()
+        openAITranscriber.delegate = self
+        activeCaptionerGeneration = generation
+        _ = pipelineLifecycle.markRunning(
+            generation: generation,
+            currentConfiguration: configuration
+        )
+        isStarting = false
+        isRunning = true
+        return (generation, transcriber, openAITranscriber)
+    }
+
+    func warmTranslationSessionForTesting() {
+        warmTranslationSession()
+    }
+
+    var systemAudioCaptureForTesting: SystemAudioCapture {
+        systemAudioCapture
+    }
+
+    func simulateSystemAudioStartFailureForTesting(_ error: Error) async -> UInt64? {
+        guard !isRunning, !isStarting, audioInputSource == .systemAudio else {
+            return nil
+        }
+
+        let configuration = currentStartConfiguration()
+        let generation = pipelineLifecycle.beginStart(configuration: configuration)
+        activeCaptureStartGeneration = generation
+        isStarting = true
+        statusMessage = AppText.startingCapture(for: .systemAudio)
+        await handleCaptureStartFailure(
+            error,
+            generation: generation,
+            configuration: configuration
+        )
+        completeCaptureStartAttempt(generation: generation)
+        return generation
+    }
+#endif
 }
 
 extension TranslationSessionStore: SystemAudioCaptureDelegate {
-    nonisolated func systemAudioCapture(_ capture: SystemAudioCapture, didOutput sampleBuffer: CMSampleBuffer) {
-        transcriber.append(sampleBuffer)
-        openAITranscriber.append(sampleBuffer)
-        geminiLiveTranslator.append(sampleBuffer)
+    nonisolated func systemAudioCapture(
+        _ capture: SystemAudioCapture,
+        didOutput sampleBuffer: CMSampleBuffer,
+        generation: UInt64
+    ) {
+        audioSamplePipelineRegistry.append(sampleBuffer, generation: generation)
     }
 
-    nonisolated func systemAudioCapture(_ capture: SystemAudioCapture, didReceiveAudioSampleCount count: Int, level: Float?) {
+    nonisolated func systemAudioCapture(
+        _ capture: SystemAudioCapture,
+        didReceiveAudioSampleCount count: Int,
+        level: Float?,
+        generation: UInt64
+    ) {
         Task { @MainActor in
+            guard capture === systemAudioCapture,
+                  pipelineLifecycle.acceptsSample(generation: generation)
+            else {
+                return
+            }
             audioSampleCount = count
             latestAudioLevel = level
             guard !isPaused else {
@@ -3716,6 +4404,27 @@ extension TranslationSessionStore: SystemAudioCaptureDelegate {
             if let level, level < -50 {
                 scheduleTranscriptCleanup()
             }
+        }
+    }
+
+    nonisolated func systemAudioCapture(
+        _ capture: SystemAudioCapture,
+        didFail error: Error,
+        generation: UInt64
+    ) {
+        Task { @MainActor in
+            guard capture === systemAudioCapture else { return }
+            handleFatalPipelineError(error, generation: generation)
+        }
+    }
+
+    nonisolated func systemAudioCaptureDidStopByUser(
+        _ capture: SystemAudioCapture,
+        generation: UInt64
+    ) {
+        Task { @MainActor in
+            guard capture === systemAudioCapture else { return }
+            handleSystemAudioCaptureStoppedByUser(generation: generation)
         }
     }
 
@@ -3742,18 +4451,26 @@ extension TranslationSessionStore: SystemAudioCaptureDelegate {
 }
 
 extension TranslationSessionStore: MicrophoneAudioCaptureDelegate {
-    nonisolated func microphoneAudioCapture(_ capture: MicrophoneAudioCapture, didOutput sampleBuffer: CMSampleBuffer) {
-        transcriber.append(sampleBuffer)
-        openAITranscriber.append(sampleBuffer)
-        geminiLiveTranslator.append(sampleBuffer)
+    nonisolated func microphoneAudioCapture(
+        _ capture: MicrophoneAudioCapture,
+        didOutput sampleBuffer: CMSampleBuffer,
+        generation: UInt64
+    ) {
+        audioSamplePipelineRegistry.append(sampleBuffer, generation: generation)
     }
 
     nonisolated func microphoneAudioCapture(
         _ capture: MicrophoneAudioCapture,
         didReceiveAudioSampleCount count: Int,
-        level: Float?
+        level: Float?,
+        generation: UInt64
     ) {
         Task { @MainActor in
+            guard capture === microphoneAudioCapture,
+                  pipelineLifecycle.acceptsSample(generation: generation)
+            else {
+                return
+            }
             audioSampleCount = count
             latestAudioLevel = level
             guard !isPaused else {
@@ -3768,6 +4485,17 @@ extension TranslationSessionStore: MicrophoneAudioCaptureDelegate {
             }
         }
     }
+
+    nonisolated func microphoneAudioCapture(
+        _ capture: MicrophoneAudioCapture,
+        didFail error: Error,
+        generation: UInt64
+    ) {
+        Task { @MainActor in
+            guard capture === microphoneAudioCapture else { return }
+            handleFatalPipelineError(error, generation: generation)
+        }
+    }
 }
 
 extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
@@ -3778,6 +4506,9 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
         confidence: Double
     ) {
         Task { @MainActor in
+            guard activeGeneration(for: transcriber, requiresRunning: true) != nil else {
+                return
+            }
             enqueueRecognizedCaption(
                 sourceText: text,
                 recognizedLanguage: language,
@@ -3793,6 +4524,9 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
         confidence: Double
     ) {
         Task { @MainActor in
+            guard activeGeneration(for: transcriber, requiresRunning: true) != nil else {
+                return
+            }
             appendRealtimeTranslationOnly(text)
         }
     }
@@ -3803,6 +4537,9 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
         confidence: Double
     ) {
         Task { @MainActor in
+            guard activeGeneration(for: transcriber, requiresRunning: true) != nil else {
+                return
+            }
             updateRealtimeTranslationSourceTranscript(text)
         }
     }
@@ -3813,7 +4550,8 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
         sampleRate: Double
     ) {
         Task { @MainActor in
-            guard isRunning,
+            guard activeGeneration(for: transcriber, requiresRunning: true) != nil,
+                  isRunning,
                   !isPaused,
                   isDubbingEnabled,
                   openAITranslationModel.usesRealtimeAudioTranslation
@@ -3827,7 +4565,13 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
 
     nonisolated func liveSpeechTranscriber(_ transcriber: LiveSpeechTranscriber, didFail error: Error) {
         Task { @MainActor in
-            statusMessage = error.localizedDescription
+            guard let generation = activeGeneration(
+                for: transcriber,
+                requiresRunning: false
+            ) else {
+                return
+            }
+            handleFatalPipelineError(error, generation: generation)
         }
     }
 }
@@ -3839,6 +4583,9 @@ extension TranslationSessionStore: GeminiLiveTranslationServiceDelegate {
         languageCode _: String?
     ) {
         Task { @MainActor in
+            guard activeGeneration(for: service, requiresRunning: true) != nil else {
+                return
+            }
             updateGeminiLiveInputTranscript(text)
         }
     }
@@ -3849,6 +4596,9 @@ extension TranslationSessionStore: GeminiLiveTranslationServiceDelegate {
         languageCode _: String?
     ) {
         Task { @MainActor in
+            guard activeGeneration(for: service, requiresRunning: true) != nil else {
+                return
+            }
             updateGeminiLiveOutputTranscript(text)
         }
     }
@@ -3859,7 +4609,8 @@ extension TranslationSessionStore: GeminiLiveTranslationServiceDelegate {
         sampleRate: Double
     ) {
         Task { @MainActor in
-            guard isRunning,
+            guard activeGeneration(for: service, requiresRunning: true) != nil,
+                  isRunning,
                   !isPaused,
                   isDubbingEnabled,
                   isUsingGeminiTranslation
@@ -3875,6 +4626,9 @@ extension TranslationSessionStore: GeminiLiveTranslationServiceDelegate {
         _ service: GeminiLiveTranslationService
     ) {
         Task { @MainActor in
+            guard activeGeneration(for: service, requiresRunning: true) != nil else {
+                return
+            }
             openAIRealtimeAudioOutput.stop()
         }
     }
@@ -3884,7 +4638,13 @@ extension TranslationSessionStore: GeminiLiveTranslationServiceDelegate {
         didFail error: Error
     ) {
         Task { @MainActor in
-            statusMessage = error.localizedDescription
+            guard let generation = activeGeneration(
+                for: service,
+                requiresRunning: false
+            ) else {
+                return
+            }
+            handleFatalPipelineError(error, generation: generation)
         }
     }
 }

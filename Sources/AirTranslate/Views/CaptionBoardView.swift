@@ -66,7 +66,11 @@ private struct CaptionTranscriptFeed: View {
             ContentUnavailableView(
                 AppText.noCaptionsYet,
                 systemImage: "captions.bubble",
-                description: Text(AppText.noCaptionsDescription)
+                description: Text(
+                    session.isUsingGPTTranscriptionMode
+                        ? AppText.gptTranscriptionNoCaptionsDescription(for: session.audioInputSource)
+                        : AppText.noCaptionsDescription
+                )
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .padding(24)

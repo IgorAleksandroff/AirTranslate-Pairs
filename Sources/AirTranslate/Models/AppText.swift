@@ -161,8 +161,10 @@ enum AppText {
     )
     static let openAIAPIKey = localized(english: "OpenAI API Key", korean: "OpenAI API 키")
     static let openAIAPIKeyDescription = localized(
-        english: "Enter your API key in the app. AirTranslate stores it in macOS Keychain and uses it only for OpenAI translation.",
-        korean: "앱에서 API 키를 입력하세요. AirTranslate는 키를 macOS Keychain에 저장하고 OpenAI 번역에만 사용합니다."
+        english: "Enter your API key in the app. AirTranslate stores it in macOS Keychain and uses it only for OpenAI translation and GPT transcription.",
+        korean: "앱에서 API 키를 입력하세요. AirTranslate는 키를 macOS Keychain에 저장하고 OpenAI 번역과 GPT 전사에만 사용합니다.",
+        japanese: "アプリでAPIキーを入力してください。AirTranslateはキーをmacOS Keychainに保存し、OpenAI翻訳とGPT文字起こしにのみ使用します。",
+        chineseSimplified: "请在应用中输入 API key。AirTranslate 会将密钥保存在 macOS Keychain 中，并且仅用于 OpenAI 翻译和 GPT 转写。"
     )
     static let openAIAPIKeyPlaceholder = localized(
         english: "Paste API key",
@@ -258,10 +260,10 @@ enum AppText {
         )
     }
     static let openAIAPIKeyRequiredForGPTMode = localized(
-        english: "Enter an OpenAI API key to use GPT mode.",
-        korean: "GPT 모드를 사용하려면 OpenAI API 키를 입력하세요.",
-        japanese: "GPTモードを使うにはOpenAI APIキーを入力してください。",
-        chineseSimplified: "要使用 GPT 模式，请输入 OpenAI API key。"
+        english: "Enter an OpenAI API key to use GPT translation or GPT transcription.",
+        korean: "GPT 번역 또는 GPT 전사를 사용하려면 OpenAI API 키를 입력하세요.",
+        japanese: "GPT翻訳またはGPT文字起こしを使うにはOpenAI APIキーを入力してください。",
+        chineseSimplified: "要使用 GPT 翻译或 GPT 转写，请输入 OpenAI API key。"
     )
     static let openAIAPIKeyEmpty = localized(
         english: "Enter an OpenAI API key before saving.",
@@ -302,6 +304,24 @@ enum AppText {
         korean: "전사",
         japanese: "文字起こし",
         chineseSimplified: "转写"
+    )
+    static let gptTranscriptionMode = localized(
+        english: "GPT Transcription",
+        korean: "GPT 전사",
+        japanese: "GPT文字起こし",
+        chineseSimplified: "GPT 转写"
+    )
+    static let gptTranscriptionModeDescription = localized(
+        english: "Streams 24 kHz audio to gpt-live-transcribe for source-language captions only.",
+        korean: "24kHz 오디오를 gpt-live-transcribe로 전송해 원문 자막만 만듭니다.",
+        japanese: "24 kHz音声をgpt-live-transcribeに送信し、原文字幕のみを作成します。",
+        chineseSimplified: "将 24 kHz 音频传输至 gpt-live-transcribe，仅生成原文字幕。"
+    )
+    static let gptTranscriptionSourceOnly = localized(
+        english: "Source transcription only",
+        korean: "원문 전사만",
+        japanese: "原文文字起こしのみ",
+        chineseSimplified: "仅原文转写"
     )
     static let gptModelsDescription = localized(
         english: "GPT mode streams audio through OpenAI Realtime Translation and shows the returned translated stream.",
@@ -606,6 +626,24 @@ enum AppText {
         english: "Start capture, play audio on this Mac, and grant Screen Recording, System Audio Recording, and Speech permissions.",
         korean: "캡처를 시작하고 이 Mac에서 오디오를 재생한 뒤 화면 기록, 시스템 오디오 녹음, 음성 인식 권한을 허용하세요."
     )
+    static func gptTranscriptionNoCaptionsDescription(for source: AudioInputSource) -> String {
+        switch source {
+        case .systemAudio:
+            localized(
+                english: "Start capture, play audio on this Mac, and grant Screen Recording and System Audio Recording permissions.",
+                korean: "캡처를 시작하고 이 Mac에서 오디오를 재생한 뒤 화면 기록과 시스템 오디오 녹음 권한을 허용하세요.",
+                japanese: "キャプチャを開始してMacで音声を再生し、画面収録とシステムオーディオ収録を許可してください。",
+                chineseSimplified: "开始捕获并在这台 Mac 上播放音频，然后允许屏幕录制和系统音频录制。"
+            )
+        case .microphone:
+            localized(
+                english: "Start capture and grant Microphone access when macOS asks.",
+                korean: "캡처를 시작하고 macOS가 요청하면 마이크 접근을 허용하세요.",
+                japanese: "キャプチャを開始し、macOSから求められたらマイクへのアクセスを許可してください。",
+                chineseSimplified: "开始捕获，并在 macOS 提示时允许麦克风访问。"
+            )
+        }
+    }
     static let openPrivacySettings = localized(
         english: "Open Privacy Settings",
         korean: "개인정보 보호 설정 열기"
@@ -630,6 +668,12 @@ enum AppText {
     static let connectingGeminiLiveTranslation = localized(
         english: "Connecting to Gemini Live Translate...",
         korean: "Gemini 실시간 번역에 연결 중..."
+    )
+    static let connectingGPTTranscription = localized(
+        english: "Connecting to GPT transcription...",
+        korean: "GPT 전사에 연결 중...",
+        japanese: "GPT文字起こしに接続中...",
+        chineseSimplified: "正在连接 GPT 转写..."
     )
     static func startingCapture(for source: AudioInputSource) -> String {
         switch source {
@@ -765,6 +809,12 @@ enum AppText {
     static let openAIInvalidResponse = localized(
         english: "OpenAI returned an invalid response.",
         korean: "OpenAI가 올바르지 않은 응답을 반환했습니다."
+    )
+    static let openAIRealtimeConnectionFailed = localized(
+        english: "OpenAI Realtime connection failed. Check your network and API key, then try again.",
+        korean: "OpenAI Realtime 연결에 실패했습니다. 네트워크와 API 키를 확인한 뒤 다시 시도하세요.",
+        japanese: "OpenAI Realtimeへの接続に失敗しました。ネットワークとAPIキーを確認して、もう一度お試しください。",
+        chineseSimplified: "OpenAI Realtime 连接失败。请检查网络和 API key 后重试。"
     )
     static let openAIEmptyOutput = localized(
         english: "OpenAI returned no translated text.",

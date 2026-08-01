@@ -32,6 +32,34 @@ struct RealtimeTranscriptThrottleTests {
     }
 
     @Test
+    func immediatePublishMaySynchronouslyResetWithoutDeadlock() {
+        let throttle = RealtimeTranscriptPublishThrottle(publishInterval: 0.05)
+        let recorder = TranscriptPublishRecorder()
+
+        throttle.append("Hello") { _ in
+            throttle.reset()
+            recorder.record("reset-returned")
+        }
+
+        #expect(recorder.texts == ["reset-returned"])
+    }
+
+    @Test
+    func trailingPublishMaySynchronouslyResetWithoutDeadlock() async throws {
+        let throttle = RealtimeTranscriptPublishThrottle(publishInterval: 0.05)
+        let recorder = TranscriptPublishRecorder()
+
+        throttle.append("Hello") { recorder.record($0) }
+        throttle.append(" world") { _ in
+            throttle.reset()
+            recorder.record("reset-returned")
+        }
+        try await Task.sleep(for: .seconds(0.3))
+
+        #expect(recorder.texts.last == "reset-returned")
+    }
+
+    @Test
     func trailingFlushPublishesSuppressedTailAfterSilence() async throws {
         let throttle = RealtimeTranscriptPublishThrottle(publishInterval: 0.05)
         let recorder = TranscriptPublishRecorder()

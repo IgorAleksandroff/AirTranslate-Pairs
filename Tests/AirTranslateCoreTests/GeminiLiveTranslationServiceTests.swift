@@ -100,6 +100,8 @@ struct GeminiLiveTranslationServiceTests {
     @Test
     func preSetupAudioBufferDropsOldestChunksBeyondCap() {
         let service = GeminiLiveTranslationService()
+        let degradationRecorder = GeminiAudioDegradationRecorder()
+        service.onAudioTransportDegraded = { degradationRecorder.record($0) }
         let chunkCharacterCount = 40_000
         let chunks = ["A", "B", "C", "D"].map { String(repeating: $0, count: chunkCharacterCount) }
 
@@ -108,6 +110,38 @@ struct GeminiLiveTranslationServiceTests {
         }
 
         #expect(service.bufferedPreSetupAudioChunks == Array(chunks.dropFirst()))
+        #expect(degradationRecorder.events.count == 1)
+        #expect(service.audioTransportDegradation?.phase == .preSetupBuffer)
+        #expect(service.audioTransportDegradation?.policy == .dropOldest)
+        #expect(service.audioTransportDegradation?.droppedChunkCount == 1)
+        #expect(abs((service.audioTransportDegradation?.droppedAudioDuration ?? 0) - 0.9375) < 0.000_1)
+    }
+
+    @Test
+    func saturatedSendWindowReportsDroppedAudioDuration() {
+        let service = GeminiLiveTranslationService()
+        let degradationRecorder = GeminiAudioDegradationRecorder()
+        service.onAudioTransportDegraded = { degradationRecorder.record($0) }
+        let fortyMillisecondsOfPCM16 = 16_000 * 2 * 40 / 1_000
+
+        for _ in 0..<48 {
+            #expect(service.reserveAudioSendSlot(audioByteCount: fortyMillisecondsOfPCM16))
+        }
+        #expect(!service.reserveAudioSendSlot(audioByteCount: fortyMillisecondsOfPCM16))
+
+        let degradation = service.audioTransportDegradation
+        #expect(degradationRecorder.events.count == 1)
+        #expect(degradation?.provider == .gemini)
+        #expect(degradation?.policy == .dropNewest)
+        #expect(degradation?.phase == .sendWindow)
+        #expect(degradation?.droppedChunkCount == 1)
+        #expect(abs((degradation?.droppedAudioDuration ?? 0) - 0.04) < 0.000_1)
+        #expect(degradation?.pendingSendCount == 48)
+        #expect(degradation?.pendingSendLimit == 48)
+
+        for _ in 0..<48 {
+            service.releaseAudioSendSlot()
+        }
     }
 
     @Test
@@ -170,6 +204,70 @@ struct GeminiLiveTranslationServiceTests {
     }
 
     @Test
+    func serverErrorsDoNotExposeProviderMessages() {
+        let service = GeminiLiveTranslationService()
+        let delegate = GeminiLiveTranslationProbe()
+        service.delegate = delegate
+
+        service.handleEventText(
+            #"{"error":{"message":"Authorization: Bearer test-secret-key?key=secret"}}"#
+        )
+
+        #expect(delegate.error?.localizedDescription == AppText.geminiInvalidResponse)
+        #expect(delegate.error?.localizedDescription.contains("test-secret-key") == false)
+        #expect(delegate.error?.localizedDescription.contains("Bearer") == false)
+        #expect(delegate.error?.localizedDescription.contains("?key=") == false)
+    }
+
+    @Test
+    func stopFencesLateReceiveEventsFromThePreviousConnection() {
+        let service = GeminiLiveTranslationService()
+        let delegate = GeminiLiveTranslationProbe()
+        service.delegate = delegate
+        let stoppedGeneration = service.currentConnectionGeneration
+
+        service.stop()
+        service.handleEventText(
+            #"{"serverContent":{"inputTranscription":{"text":"stale","languageCode":"en"}}}"#,
+            connectionGeneration: stoppedGeneration
+        )
+        service.handleEventText(
+            #"{"setupComplete":{}}"#,
+            connectionGeneration: stoppedGeneration
+        )
+
+        #expect(delegate.inputTranscript.isEmpty)
+        #expect(!service.isReadyForRealtimeInput)
+    }
+
+    @Test
+    func staleSendCompletionCannotReleaseANewerConnectionsSlot() {
+        let service = GeminiLiveTranslationService()
+        let stoppedGeneration = service.currentConnectionGeneration
+        #expect(
+            service.reserveAudioSendSlot(
+                audioByteCount: 1_280,
+                connectionGeneration: stoppedGeneration
+            )
+        )
+
+        service.stop()
+        let currentGeneration = service.currentConnectionGeneration
+        #expect(
+            service.reserveAudioSendSlot(
+                audioByteCount: 1_280,
+                connectionGeneration: currentGeneration
+            )
+        )
+
+        service.releaseAudioSendSlot(connectionGeneration: stoppedGeneration)
+
+        #expect(service.pendingAudioSendSlotCount == 1)
+        service.releaseAudioSendSlot(connectionGeneration: currentGeneration)
+        #expect(service.pendingAudioSendSlotCount == 0)
+    }
+
+    @Test
     func connectionObserverResumesAfterSocketOpens() async throws {
         let observer = GeminiLiveWebSocketConnectionObserver()
         let session = URLSession.shared
@@ -212,6 +310,23 @@ struct GeminiLiveTranslationServiceTests {
             #expect(nsError.domain == NSPOSIXErrorDomain)
             #expect(nsError.code == Int(ECONNREFUSED))
         }
+    }
+}
+
+private final class GeminiAudioDegradationRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedEvents: [RealtimeAudioTransportDegradation] = []
+
+    var events: [RealtimeAudioTransportDegradation] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedEvents
+    }
+
+    func record(_ event: RealtimeAudioTransportDegradation) {
+        lock.lock()
+        storedEvents.append(event)
+        lock.unlock()
     }
 }
 

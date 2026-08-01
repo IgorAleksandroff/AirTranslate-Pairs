@@ -71,8 +71,8 @@ struct SidebarView: View {
                     sourceSelection: quickSourceLanguageBinding,
                     targetSelection: quickTargetLanguageBinding,
                     isTranscribeOnlyMode: session.isTranscribeOnlyMode,
-                    isDisabled: session.isRunning,
-                    swap: session.swapQuickLanguagePair
+                    isDisabled: isSessionConfigurationLocked,
+                    swap: swapQuickLanguagePairIfConfigurationUnlocked
                 )
                 }
 
@@ -82,7 +82,7 @@ struct SidebarView: View {
                     title: AppText.localized(english: "Audio", korean: "오디오", japanese: "オーディオ", chineseSimplified: "音频"),
                     systemImage: "mic"
                 ) {
-                    Picker(AppText.audioInputSource, selection: $session.audioInputSource) {
+                    Picker(AppText.audioInputSource, selection: audioInputSourceBinding) {
                         ForEach(AudioInputSource.allCases) { source in
                             Text(source.title).tag(source)
                         }
@@ -90,15 +90,15 @@ struct SidebarView: View {
                     .pickerStyle(.segmented)
                     .labelsHidden()
                     .controlSize(.large)
-                    .disabled(session.isRunning)
+                    .disabled(isSessionConfigurationLocked)
                     .accessibilityLabel(AppText.audioInputSource)
                 }
 
                 if session.audioInputSource == .microphone {
                     MicrophoneInputDevicePicker(
-                        selection: $session.selectedMicrophoneInputDeviceID,
+                        selection: microphoneInputDeviceBinding,
                         devices: session.microphoneInputDevices,
-                        isDisabled: session.isRunning
+                        isDisabled: isSessionConfigurationLocked
                     )
                     .padding(.horizontal, 10)
                     .padding(.bottom, 8)
@@ -110,10 +110,14 @@ struct SidebarView: View {
                     title: AppText.localized(english: "Output", korean: "출력", japanese: "出力", chineseSimplified: "输出"),
                     systemImage: "viewfinder"
                 ) {
-                    if usesAPIModeOutputControl {
+                    if session.isUsingGPTTranscriptionMode {
+                        Text(AppText.gptTranscriptionSourceOnly)
+                            .font(.callout.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    } else if usesAPIModeOutputControl {
                         SidebarLiveTranslationButton(
-                            isDisabled: session.isRunning,
-                            action: session.useTranslationMode
+                            isDisabled: isSessionConfigurationLocked,
+                            action: useTranslationModeIfConfigurationUnlocked
                         )
                     } else {
                         Picker(AppText.outputMode, selection: liveOutputModeBinding) {
@@ -124,21 +128,25 @@ struct SidebarView: View {
                         .pickerStyle(.segmented)
                         .labelsHidden()
                         .controlSize(.large)
-                        .disabled(session.isRunning)
+                        .disabled(isSessionConfigurationLocked)
                         .accessibilityLabel(AppText.outputMode)
                     }
                 }
 
-                SidebarVoiceOutputToggle(
-                    isOn: $session.isDubbingEnabled
-                )
-                .padding(.horizontal, 16)
-                .padding(.top, -4)
-                .padding(.bottom, session.isDubbingEnabled ? 8 : 13)
+                if !session.isUsingGPTTranscriptionMode {
+                    SidebarVoiceOutputToggle(
+                        isOn: dubbingEnabledBinding,
+                        isDisabled: isSessionConfigurationLocked
+                    )
+                    .padding(.horizontal, 16)
+                    .padding(.top, -4)
+                    .padding(.bottom, session.isDubbingEnabled ? 8 : 13)
+                }
 
-                if session.isDubbingEnabled {
+                if !session.isUsingGPTTranscriptionMode, session.isDubbingEnabled {
                     SidebarVolumeControls(
-                        volume: $session.translatedVoiceVolume
+                        volume: translatedVoiceVolumeBinding,
+                        isDisabled: isSessionConfigurationLocked
                     )
                     .padding(.horizontal, 16)
                     .padding(.top, -4)
@@ -148,6 +156,7 @@ struct SidebarView: View {
         }
         .onAppear {
             session.refreshModelAvailability()
+            guard !isSessionConfigurationLocked else { return }
             session.refreshMicrophoneInputDevices()
             if usesOpenAIAutoLanguageFlow {
                 session.usePreferredLanguageForOpenAIOutput()
@@ -156,127 +165,151 @@ struct SidebarView: View {
     }
 
     private var detailsCard: some View {
-        Button {
+        let title = AppText.localized(
+            english: "Details",
+            korean: "세부 설정",
+            japanese: "詳細設定",
+            chineseSimplified: "详细设置"
+        )
+        let value = "\(ProcessingEngine.current(for: session).title) · \(session.sessionDurationMode.title)"
+
+        return Button(title) {
             openSettings()
-        } label: {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(AppText.localized(english: "Details", korean: "세부 설정", japanese: "詳細設定", chineseSimplified: "详细设置"))
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.primary)
-
-                    Text("\(ProcessingEngine.current(for: session).title) · \(session.sessionDurationMode.title)")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "gearshape")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 30, height: 30)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 20)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.06))
-            }
         }
         .buttonStyle(.plain)
+        .font(.title3.weight(.semibold))
+        .foregroundStyle(.primary)
+        .padding(.leading, 16)
+        .padding(.trailing, 52)
+        .padding(.top, 16)
+        .padding(.bottom, 46)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06))
+        }
+        .overlay(alignment: .bottomLeading) {
+            Text(value)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.leading, 16)
+                .padding(.bottom, 18)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .trailing) {
+            Image(systemName: "gearshape")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 30, height: 30)
+                .padding(.horizontal, 16)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+        }
         .help(AppText.configureTranslationSettings)
-        .accessibilityLabel(AppText.configureTranslationSettings)
-        .accessibilityValue("\(ProcessingEngine.current(for: session).title), \(session.sessionDurationMode.title)")
+        .accessibilityValue("\(AppText.configureTranslationSettings), \(value)")
     }
 
     private var apiKeyCard: some View {
-        Button {
+        Button(missingAPIKeyTitle) {
             session.requestAPIKeySettings()
             openSettings()
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "key.fill")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(Color.orange)
-                    .frame(width: 42, height: 42)
-                    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(missingAPIKeyTitle)
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.primary)
-
-                    Text(SettingsSidebarCopy.apiKeyAction)
-                        .font(.callout)
-                        .foregroundStyle(Color.orange)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.right")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .strokeBorder(Color.orange.opacity(0.28))
-            }
         }
         .buttonStyle(.plain)
+        .font(.headline.weight(.semibold))
+        .foregroundStyle(.primary)
+        .padding(.leading, 74)
+        .padding(.trailing, 44)
+        .padding(.top, 15)
+        .padding(.bottom, 43)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(Color.orange.opacity(0.28))
+        }
+        .overlay(alignment: .leading) {
+            Image(systemName: "key.fill")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Color.orange)
+                .frame(width: 42, height: 42)
+                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .padding(.leading, 16)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottomLeading) {
+            Text(SettingsSidebarCopy.apiKeyAction)
+                .font(.callout)
+                .foregroundStyle(Color.orange)
+                .lineLimit(1)
+                .padding(.leading, 74)
+                .padding(.bottom, 17)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .trailing) {
+            Image(systemName: "chevron.right")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.trailing, 16)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+        }
         .help(missingAPIKeyTitle)
-        .accessibilityLabel(missingAPIKeyTitle)
+        .accessibilityValue(SettingsSidebarCopy.apiKeyAction)
         .accessibilityHint(SettingsSidebarCopy.apiKeyAction)
     }
 
     private var storageRow: some View {
-        Button {
+        Button(AppText.library) {
             isLibraryPresented = true
-        } label: {
-            HStack(spacing: 12) {
-                Image(systemName: "tray.full")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 42, height: 42)
-                    .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(AppText.library)
-                        .font(.headline.weight(.semibold))
-                        .foregroundStyle(.primary)
-
-                    Text(AppText.manageSavedTranscripts)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-
-                Spacer(minLength: 0)
-
-                Image(systemName: "chevron.right")
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 18)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 13, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.06))
-            }
         }
         .buttonStyle(.plain)
+        .font(.headline.weight(.semibold))
+        .foregroundStyle(.primary)
+        .padding(.leading, 74)
+        .padding(.trailing, 44)
+        .padding(.top, 15)
+        .padding(.bottom, 43)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 13, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.06))
+        }
+        .overlay(alignment: .leading) {
+            Image(systemName: "tray.full")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .frame(width: 42, height: 42)
+                .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .padding(.leading, 16)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .bottomLeading) {
+            Text(AppText.manageSavedTranscripts)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.leading, 74)
+                .padding(.bottom, 17)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+        }
+        .overlay(alignment: .trailing) {
+            Image(systemName: "chevron.right")
+                .font(.callout.weight(.semibold))
+                .foregroundStyle(.secondary)
+                .padding(.trailing, 16)
+                .accessibilityHidden(true)
+                .allowsHitTesting(false)
+        }
         .help(AppText.manageSavedTranscripts)
-        .accessibilityLabel(AppText.manageSavedTranscripts)
+        .accessibilityValue(AppText.manageSavedTranscripts)
     }
 
     private var quickSettingsTitle: String {
@@ -288,13 +321,47 @@ struct SidebarView: View {
         )
     }
 
+    private var isSessionConfigurationLocked: Bool {
+        SidebarSessionConfigurationAccess.isLocked(
+            isRunning: session.isRunning,
+            isStarting: session.isStarting
+        )
+    }
+
     private var liveOutputModeBinding: Binding<LiveOutputMode> {
         Binding(
             get: {
                 session.liveOutputMode
             },
             set: { mode in
+                guard !isSessionConfigurationLocked else { return }
                 session.useLiveOutputMode(mode)
+            }
+        )
+    }
+
+    private var audioInputSourceBinding: Binding<AudioInputSource> {
+        lockedSessionConfigurationBinding($session.audioInputSource)
+    }
+
+    private var microphoneInputDeviceBinding: Binding<String> {
+        lockedSessionConfigurationBinding($session.selectedMicrophoneInputDeviceID)
+    }
+
+    private var dubbingEnabledBinding: Binding<Bool> {
+        lockedSessionConfigurationBinding($session.isDubbingEnabled)
+    }
+
+    private var translatedVoiceVolumeBinding: Binding<Double> {
+        lockedSessionConfigurationBinding($session.translatedVoiceVolume)
+    }
+
+    private func lockedSessionConfigurationBinding<Value>(_ binding: Binding<Value>) -> Binding<Value> {
+        Binding(
+            get: { binding.wrappedValue },
+            set: { value in
+                guard !isSessionConfigurationLocked else { return }
+                binding.wrappedValue = value
             }
         )
     }
@@ -303,6 +370,7 @@ struct SidebarView: View {
         Binding {
             session.sourceLanguage
         } set: { language in
+            guard !isSessionConfigurationLocked else { return }
             session.useQuickSourceLanguage(language)
         }
     }
@@ -311,8 +379,19 @@ struct SidebarView: View {
         Binding {
             session.targetLanguage
         } set: { language in
+            guard !isSessionConfigurationLocked else { return }
             session.useQuickTargetLanguage(language)
         }
+    }
+
+    private func useTranslationModeIfConfigurationUnlocked() {
+        guard !isSessionConfigurationLocked else { return }
+        session.useTranslationMode()
+    }
+
+    private func swapQuickLanguagePairIfConfigurationUnlocked() {
+        guard !isSessionConfigurationLocked else { return }
+        session.swapQuickLanguagePair()
     }
 
     private var usesOpenAIAutoLanguageFlow: Bool {
@@ -325,7 +404,7 @@ struct SidebarView: View {
 
     private var shouldShowAPIKeyCard: Bool {
         switch ProcessingEngine.current(for: session) {
-        case .gpt:
+        case .gpt, .gptTranscription:
             !session.hasOpenAIAPIKey
         case .gemini:
             !session.hasGeminiAPIKey
@@ -336,7 +415,7 @@ struct SidebarView: View {
 
     private var missingAPIKeyTitle: String {
         switch ProcessingEngine.current(for: session) {
-        case .gpt:
+        case .gpt, .gptTranscription:
             AppText.openAIAPIKeyNotConfigured
         case .gemini:
             AppText.geminiAPIKeyNotConfigured
@@ -345,6 +424,12 @@ struct SidebarView: View {
         }
     }
 
+}
+
+enum SidebarSessionConfigurationAccess {
+    static func isLocked(isRunning: Bool, isStarting: Bool) -> Bool {
+        isRunning || isStarting
+    }
 }
 
 private enum SettingsSidebarCopy {
@@ -365,6 +450,7 @@ private enum SettingsSidebarCopy {
 private enum ProcessingEngine: String, CaseIterable, Identifiable {
     case apple
     case gpt
+    case gptTranscription
     case gemini
 
     var id: String { rawValue }
@@ -385,6 +471,8 @@ private enum ProcessingEngine: String, CaseIterable, Identifiable {
                 japanese: "GPTモード",
                 chineseSimplified: "GPT 模式"
             )
+        case .gptTranscription:
+            AppText.gptTranscriptionMode
         case .gemini:
             AppText.localized(
                 english: "Gemini Live",
@@ -397,6 +485,9 @@ private enum ProcessingEngine: String, CaseIterable, Identifiable {
 
     @MainActor
     static func current(for session: TranslationSessionStore) -> ProcessingEngine {
+        if session.isUsingGPTTranscriptionMode {
+            return .gptTranscription
+        }
         if session.openAITranscriptionModel.isEnabled || session.openAITranslationModel.isEnabled {
             return .gpt
         }
@@ -726,6 +817,7 @@ private struct SidebarLiveTranslationButton: View {
 
 private struct SidebarVoiceOutputToggle: View {
     @Binding var isOn: Bool
+    let isDisabled: Bool
 
     var body: some View {
         Toggle(isOn: $isOn) {
@@ -744,6 +836,7 @@ private struct SidebarVoiceOutputToggle: View {
         .controlSize(.small)
         .padding(10)
         .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .disabled(isDisabled)
         .accessibilityLabel(AppText.voiceOutput)
         .accessibilityValue(isOn ? AppText.floatingCaptionPowerOn : AppText.floatingCaptionPowerOff)
     }
@@ -751,6 +844,7 @@ private struct SidebarVoiceOutputToggle: View {
 
 private struct SidebarVolumeControls: View {
     @Binding var volume: Double
+    let isDisabled: Bool
 
     var body: some View {
         SidebarMiniVolumeSlider(
@@ -761,6 +855,7 @@ private struct SidebarVolumeControls: View {
         )
         .padding(10)
         .background(Color.primary.opacity(0.045), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .disabled(isDisabled)
         .accessibilityElement(children: .contain)
     }
 }

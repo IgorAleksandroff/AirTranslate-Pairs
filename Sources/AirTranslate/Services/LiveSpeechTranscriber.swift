@@ -2,6 +2,103 @@ import AVFoundation
 import CoreMedia
 import Speech
 
+enum LiveSpeechTranscriberError: LocalizedError, Equatable, Sendable {
+    case audioInputBackpressure(bufferLimit: Int)
+
+    var errorDescription: String? {
+        switch self {
+        case .audioInputBackpressure:
+            "Apple Speech stopped because audio arrived faster than it could be transcribed. Restart transcription to continue."
+        }
+    }
+}
+
+enum SpeechAnalyzerInputYieldDisposition: Equatable, Sendable {
+    case enqueued
+    case dropped
+    case terminated
+}
+
+final class SpeechAnalyzerInputQueue<Element: Sendable>: @unchecked Sendable {
+    let stream: AsyncStream<Element>
+
+    private let continuation: AsyncStream<Element>.Continuation
+    private let bufferLimit: Int
+    private let onBackpressure: @Sendable (Int) -> Void
+    private let lock = NSLock()
+    private var isFinished = false
+    private var didReportBackpressure = false
+
+    init(
+        bufferLimit: Int,
+        onBackpressure: @escaping @Sendable (Int) -> Void
+    ) {
+        precondition(bufferLimit > 0)
+
+        var capturedContinuation: AsyncStream<Element>.Continuation?
+        stream = AsyncStream(
+            bufferingPolicy: .bufferingNewest(bufferLimit)
+        ) { continuation in
+            capturedContinuation = continuation
+        }
+        continuation = capturedContinuation!
+        self.bufferLimit = bufferLimit
+        self.onBackpressure = onBackpressure
+    }
+
+    @discardableResult
+    func yield(_ element: Element) -> SpeechAnalyzerInputYieldDisposition {
+        lock.lock()
+        let canYield = !isFinished
+        lock.unlock()
+        guard canYield else { return .terminated }
+
+        switch continuation.yield(element) {
+        case .enqueued:
+            return .enqueued
+        case .dropped:
+            lock.lock()
+            let shouldReport = !isFinished && !didReportBackpressure
+            if shouldReport {
+                isFinished = true
+                didReportBackpressure = true
+            }
+            lock.unlock()
+
+            if shouldReport {
+                // Once any chunk is evicted, transcript completeness can no
+                // longer be guaranteed. End the input before reporting the
+                // fatal degradation so the owner can stop the pipeline.
+                continuation.finish()
+                onBackpressure(bufferLimit)
+            }
+            return .dropped
+        case .terminated:
+            lock.lock()
+            isFinished = true
+            lock.unlock()
+            return .terminated
+        @unknown default:
+            lock.lock()
+            isFinished = true
+            lock.unlock()
+            continuation.finish()
+            return .terminated
+        }
+    }
+
+    func finish() {
+        lock.lock()
+        let shouldFinish = !isFinished
+        isFinished = true
+        lock.unlock()
+
+        if shouldFinish {
+            continuation.finish()
+        }
+    }
+}
+
 protocol LiveSpeechTranscriberDelegate: AnyObject {
     func liveSpeechTranscriber(
         _ transcriber: LiveSpeechTranscriber,
@@ -62,18 +159,27 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
         interleaved: false
     )!
     private var analyzer: SpeechAnalyzer?
-    private var inputContinuation: AsyncStream<AnalyzerInput>.Continuation?
+    private var inputQueue: SpeechAnalyzerInputQueue<AnalyzerInput>?
     private var analyzeTask: Task<Void, Never>?
     private var resultTasks: [Task<Void, Never>] = []
     private var reservedLocales: [Locale] = []
     private let stateLock = NSLock()
     private let conversionLock = NSLock()
+    private let authorizationRequester: @Sendable () async -> Bool
     private var isPaused = false
     private var reusablePCMBuffers = [AVAudioPCMBuffer?](
         repeating: nil,
         count: reusablePCMBufferCount
     )
     private var reusablePCMBufferCursor = 0
+
+    init(
+        authorizationRequester: @escaping @Sendable () async -> Bool = {
+            await LiveSpeechTranscriber.requestAuthorization()
+        }
+    ) {
+        self.authorizationRequester = authorizationRequester
+    }
 
     static func installedSupportedLanguages(from languages: [LanguageOption]) async -> [LanguageOption] {
         guard SpeechTranscriber.isAvailable else { return [] }
@@ -101,82 +207,103 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     }
 
     func start(languages: [LanguageOption]) async throws {
-        let authorized = await requestAuthorization()
-        guard authorized else { throw SpeechError.notAuthorized }
+        do {
+            let authorized = await authorizationRequester()
+            // SFSpeechRecognizer's completion handler can resume after its
+            // surrounding task was cancelled. Check before reserving locales
+            // or constructing an analyzer so that stale starts stay local.
+            try Task.checkCancellation()
+            guard authorized else { throw SpeechError.notAuthorized }
 
-        stop()
+            stop()
 
-        var seenLanguageIDs = Set<String>()
-        let uniqueLanguages = languages.filter { language in
-            seenLanguageIDs.insert(language.id).inserted
-        }
-        var transcribers: [(language: LanguageOption, transcriber: SpeechTranscriber)] = []
-        for language in uniqueLanguages {
-            guard let supportedLocale = await SpeechTranscriber.supportedLocale(equivalentTo: language.locale) else {
-                throw SpeechError.recognizerUnavailable
+            var seenLanguageIDs = Set<String>()
+            let uniqueLanguages = languages.filter { language in
+                seenLanguageIDs.insert(language.id).inserted
             }
+            var transcribers: [(language: LanguageOption, transcriber: SpeechTranscriber)] = []
+            for language in uniqueLanguages {
+                try Task.checkCancellation()
+                guard let supportedLocale = await SpeechTranscriber.supportedLocale(equivalentTo: language.locale) else {
+                    throw SpeechError.recognizerUnavailable
+                }
+                try Task.checkCancellation()
 
-            try await AssetInventory.reserve(locale: supportedLocale)
-            reservedLocales.append(supportedLocale)
-            transcribers.append((
-                language: language,
-                transcriber: SpeechTranscriber(
-                    locale: supportedLocale,
-                    transcriptionOptions: [],
-                    reportingOptions: [.volatileResults, .fastResults],
-                    attributeOptions: [.transcriptionConfidence]
-                )
-            ))
-        }
-        let modules: [any SpeechModule] = transcribers.map(\.transcriber)
-        let inputStream = AsyncStream<AnalyzerInput>(
-            bufferingPolicy: .bufferingNewest(Self.analyzerInputBufferLimit)
-        ) { continuation in
-            self.inputContinuation = continuation
-        }
-        let analyzer = SpeechAnalyzer(modules: modules)
-
-        try await analyzer.prepareToAnalyze(in: audioFormat)
-
-        self.analyzer = analyzer
-        analyzeTask = Task { [weak self] in
-            do {
-                try await analyzer.start(inputSequence: inputStream)
-            } catch {
-                guard let self else { return }
-                self.delegate?.liveSpeechTranscriber(self, didFail: error)
+                try await AssetInventory.reserve(locale: supportedLocale)
+                reservedLocales.append(supportedLocale)
+                try Task.checkCancellation()
+                transcribers.append((
+                    language: language,
+                    transcriber: SpeechTranscriber(
+                        locale: supportedLocale,
+                        transcriptionOptions: [],
+                        reportingOptions: [.volatileResults, .fastResults],
+                        attributeOptions: [.transcriptionConfidence]
+                    )
+                ))
             }
-        }
+            let modules: [any SpeechModule] = transcribers.map(\.transcriber)
+            let inputQueue: SpeechAnalyzerInputQueue<AnalyzerInput> = makeInputQueue(
+                bufferLimit: Self.analyzerInputBufferLimit
+            )
+            stateLock.withLock {
+                self.inputQueue = inputQueue
+            }
+            let analyzer = SpeechAnalyzer(modules: modules)
+            self.analyzer = analyzer
 
-        resultTasks = transcribers.map { entry in
-            Task { [weak self] in
+            try Task.checkCancellation()
+            try await analyzer.prepareToAnalyze(in: audioFormat)
+            try Task.checkCancellation()
+
+            self.analyzer = analyzer
+            analyzeTask = Task { [weak self] in
                 do {
-                    for try await result in entry.transcriber.results {
-                        let text = String(result.text.characters)
-                            .trimmingCharacters(in: .whitespacesAndNewlines)
-                        guard !text.isEmpty else { continue }
-                        guard let self else { return }
-                        self.delegate?.liveSpeechTranscriber(
-                            self,
-                            didRecognize: text,
-                            language: entry.language,
-                            confidence: Self.averageConfidence(in: result.text)
-                        )
-                    }
+                    try await analyzer.start(inputSequence: inputQueue.stream)
                 } catch {
                     guard let self else { return }
                     self.delegate?.liveSpeechTranscriber(self, didFail: error)
                 }
             }
+
+            resultTasks = transcribers.map { entry in
+                Task { [weak self] in
+                    do {
+                        for try await result in entry.transcriber.results {
+                            let text = String(result.text.characters)
+                                .trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !text.isEmpty else { continue }
+                            guard let self else { return }
+                            self.delegate?.liveSpeechTranscriber(
+                                self,
+                                didRecognize: text,
+                                language: entry.language,
+                                confidence: Self.averageConfidence(in: result.text)
+                            )
+                        }
+                    } catch {
+                        guard let self else { return }
+                        self.delegate?.liveSpeechTranscriber(self, didFail: error)
+                    }
+                }
+            }
+            try Task.checkCancellation()
+        } catch {
+            // This instance may be a stale candidate which was never promoted
+            // to TranslationSessionStore. Its cleanup must not rely on the
+            // store's currently active generation.
+            stop()
+            throw error
         }
     }
 
     func append(_ sampleBuffer: CMSampleBuffer) {
         stateLock.lock()
         let isPaused = isPaused
+        let inputQueue = inputQueue
         stateLock.unlock()
 
-        guard !isPaused, let inputContinuation else { return }
+        guard !isPaused, let inputQueue else { return }
 
         conversionLock.lock()
         let pcmBuffer = pcmBuffer(from: sampleBuffer)
@@ -186,7 +313,7 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
             return
         }
 
-        inputContinuation.yield(AnalyzerInput(buffer: pcmBuffer))
+        inputQueue.yield(AnalyzerInput(buffer: pcmBuffer))
     }
 
     func setPaused(_ isPaused: Bool) {
@@ -196,9 +323,12 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     }
 
     func stop() {
-        setPaused(false)
-        inputContinuation?.finish()
-        inputContinuation = nil
+        stateLock.lock()
+        isPaused = false
+        let inputQueue = inputQueue
+        self.inputQueue = nil
+        stateLock.unlock()
+        inputQueue?.finish()
         analyzeTask?.cancel()
         analyzeTask = nil
         resultTasks.forEach { $0.cancel() }
@@ -221,13 +351,47 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
         }
     }
 
-    private func requestAuthorization() async -> Bool {
+    private static func requestAuthorization() async -> Bool {
         await withCheckedContinuation { continuation in
             SFSpeechRecognizer.requestAuthorization { status in
                 continuation.resume(returning: status == .authorized)
             }
         }
     }
+
+    private func makeInputQueue<Element: Sendable>(
+        bufferLimit: Int
+    ) -> SpeechAnalyzerInputQueue<Element> {
+        SpeechAnalyzerInputQueue(bufferLimit: bufferLimit) { [weak self] bufferLimit in
+            guard let self else { return }
+            delegate?.liveSpeechTranscriber(
+                self,
+                didFail: LiveSpeechTranscriberError.audioInputBackpressure(
+                    bufferLimit: bufferLimit
+                )
+            )
+        }
+    }
+
+#if DEBUG
+    var hasActiveResourcesForTesting: Bool {
+        stateLock.lock()
+        let hasInputQueue = inputQueue != nil
+        stateLock.unlock()
+
+        return analyzer != nil
+            || hasInputQueue
+            || analyzeTask != nil
+            || !resultTasks.isEmpty
+            || !reservedLocales.isEmpty
+    }
+
+    func makeInputQueueForTesting<Element: Sendable>(
+        bufferLimit: Int = LiveSpeechTranscriber.analyzerInputBufferLimit
+    ) -> SpeechAnalyzerInputQueue<Element> {
+        makeInputQueue(bufferLimit: bufferLimit)
+    }
+#endif
 
     private static func averageConfidence(in text: AttributedString) -> Double {
         var total = 0.0

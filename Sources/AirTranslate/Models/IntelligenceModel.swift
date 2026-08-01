@@ -76,6 +76,7 @@ enum IntelligenceModel: String, CaseIterable, Identifiable {
 enum OpenAIRealtimeTranscriptionModel: String, CaseIterable, Identifiable {
     case off
     case gptRealtimeWhisper = "gpt-realtime-whisper"
+    case gptLiveTranscribe = "gpt-live-transcribe"
 
     var id: String { rawValue }
 
@@ -85,6 +86,8 @@ enum OpenAIRealtimeTranscriptionModel: String, CaseIterable, Identifiable {
             AppText.localized(english: "Use Apple Speech", korean: "Apple Speech 사용", japanese: "Apple Speechを使用", chineseSimplified: "使用 Apple Speech")
         case .gptRealtimeWhisper:
             "gpt-realtime-whisper"
+        case .gptLiveTranscribe:
+            "gpt-live-transcribe"
         }
     }
 

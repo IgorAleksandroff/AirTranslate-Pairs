@@ -72,7 +72,7 @@ struct SettingsView: View {
 
     private var generalSettings: some View {
         SettingsGroup(title: SettingsCopy.modeSettings) {
-            if session.isRunning {
+            if isSessionConfigurationLocked {
                 SettingsNoticeRow(text: SettingsCopy.captureRunningDisabledReason, systemImage: "pause.circle")
             }
 
@@ -88,11 +88,11 @@ struct SettingsView: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .frame(width: 310)
-                .disabled(session.isRunning)
+                .frame(width: 340)
+                .disabled(isSessionConfigurationLocked)
             }
 
-            if processingModeSelection.wrappedValue == .openAI, !session.hasOpenAIAPIKey {
+            if (processingModeSelection.wrappedValue == .openAI || processingModeSelection.wrappedValue == .gptTranscription), !session.hasOpenAIAPIKey {
                 SettingsNoticeActionRow(
                     text: AppText.openAIAPIKeyRequiredForGPTMode,
                     systemImage: "key",
@@ -115,11 +115,24 @@ struct SettingsView: View {
                     }
                     .labelsHidden()
                     .frame(minWidth: 260, idealWidth: 320, maxWidth: 360)
-                    .disabled(session.isRunning)
+                    .disabled(isSessionConfigurationLocked)
                     .accessibilityLabel(SettingsCopy.gptRealtimeModel)
                 }
 
                 SettingsNoticeRow(text: SettingsCopy.openAIVoiceAgentModelNotice, systemImage: "info.circle")
+            }
+
+            if processingModeSelection.wrappedValue == .gptTranscription {
+                SettingsControlRow(
+                    title: AppText.gptTranscriptionModel,
+                    detail: AppText.gptTranscriptionModeDescription,
+                    systemImage: "waveform.badge.mic"
+                ) {
+                    Text(OpenAIRealtimeTranscriptionModel.gptLiveTranscribe.title)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+                SettingsNoticeRow(text: AppText.gptTranscriptionSourceOnly, systemImage: "text.quote")
             }
 
             if processingModeSelection.wrappedValue == .gemini, !session.hasGeminiAPIKey {
@@ -144,21 +157,20 @@ struct SettingsView: View {
                 }
                 .labelsHidden()
                 .frame(width: 220)
-                .disabled(session.isRunning || session.isUsingProviderRealtimeTranslation)
+                .disabled(isSessionConfigurationLocked || session.isUsingProviderRealtimeTranslation || session.isUsingGPTTranscriptionMode)
             }
 
             if session.isUsingProviderRealtimeTranslation {
                 SettingsNoticeRow(text: SettingsCopy.realtimeTranslationOutputOnly, systemImage: "waveform")
+            } else if session.isUsingGPTTranscriptionMode {
+                SettingsNoticeRow(text: AppText.gptTranscriptionSourceOnly, systemImage: "text.quote")
             }
 
             SettingsValueRow(
                 title: AppText.languages,
                 detail: SettingsCopy.languagePairDetail,
                 systemImage: "globe",
-                value: AppText.languageSummary(
-                    source: session.sourceLanguage.localizedTitle,
-                    target: session.targetLanguage.localizedTitle
-                )
+                value: session.languageSummary
             )
 
             SettingsValueRow(
@@ -269,7 +281,7 @@ struct SettingsView: View {
 
     private var audioSettings: some View {
         SettingsGroup(title: AppText.audioInputSource) {
-            if session.isRunning {
+            if isSessionConfigurationLocked {
                 SettingsNoticeRow(text: SettingsCopy.captureRunningDisabledReason, systemImage: "pause.circle")
             }
 
@@ -278,7 +290,7 @@ struct SettingsView: View {
                 detail: SettingsCopy.audioInputDetail,
                 systemImage: "waveform.badge.magnifyingglass"
             ) {
-                Picker(AppText.audioInputSource, selection: $session.audioInputSource) {
+                Picker(AppText.audioInputSource, selection: lockedSessionConfigurationBinding($session.audioInputSource)) {
                     ForEach(AudioInputSource.allCases) { source in
                         Text(source.title).tag(source)
                     }
@@ -286,7 +298,7 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 190)
-                .disabled(session.isRunning)
+                .disabled(isSessionConfigurationLocked)
             }
 
             SettingsControlRow(
@@ -294,67 +306,80 @@ struct SettingsView: View {
                 detail: SettingsCopy.microphoneDeviceDetail,
                 systemImage: "mic"
             ) {
-                Picker(AppText.microphoneInputDevice, selection: $session.selectedMicrophoneInputDeviceID) {
+                Picker(AppText.microphoneInputDevice, selection: lockedSessionConfigurationBinding($session.selectedMicrophoneInputDeviceID)) {
                     ForEach(session.microphoneInputDevices) { device in
                         Text(device.name).tag(device.id)
                     }
                 }
                 .labelsHidden()
                 .frame(width: 220)
-                .disabled(session.isRunning || session.audioInputSource != .microphone)
+                .disabled(isSessionConfigurationLocked || session.audioInputSource != .microphone)
             }
         }
     }
 
     private var outputSettings: some View {
         SettingsGroup(title: AppText.output) {
-            if session.isRunning {
+            if isSessionConfigurationLocked {
                 SettingsNoticeRow(text: SettingsCopy.captureRunningDisabledReason, systemImage: "pause.circle")
             }
 
-            SettingsControlRow(
-                title: AppText.outputMode,
-                detail: SettingsCopy.outputModeDetail,
-                systemImage: "rectangle.split.2x1"
-            ) {
-                Picker(AppText.outputMode, selection: liveOutputModeBinding) {
-                    ForEach(LiveOutputMode.allCases) { mode in
-                        Text(mode.title).tag(mode)
+            if session.isUsingGPTTranscriptionMode {
+                SettingsValueRow(
+                    title: AppText.outputMode,
+                    detail: AppText.gptTranscriptionModeDescription,
+                    systemImage: "rectangle.split.2x1",
+                    value: AppText.gptTranscriptionSourceOnly
+                )
+            } else {
+                SettingsControlRow(
+                    title: AppText.outputMode,
+                    detail: SettingsCopy.outputModeDetail,
+                    systemImage: "rectangle.split.2x1"
+                ) {
+                    Picker(AppText.outputMode, selection: liveOutputModeBinding) {
+                        ForEach(LiveOutputMode.allCases) { mode in
+                            Text(mode.title).tag(mode)
+                        }
                     }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .frame(width: 170)
+                    .disabled(isSessionConfigurationLocked || session.isUsingProviderRealtimeTranslation)
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 170)
-                .disabled(session.isRunning || session.isUsingProviderRealtimeTranslation)
             }
 
             if session.isUsingProviderRealtimeTranslation {
                 SettingsNoticeRow(text: SettingsCopy.realtimeTranslationOutputOnly, systemImage: "waveform")
             }
 
-            SettingsToggleRow(
-                title: AppText.voiceOutput,
-                detail: SettingsCopy.dubbingDetail,
-                systemImage: "speaker.wave.2",
-                isOn: $session.isDubbingEnabled
-            )
-
-            SettingsControlRow(
-                title: SettingsCopy.liveTranslationVolume,
-                detail: SettingsCopy.liveTranslationVolumeDetail,
-                systemImage: "speaker.wave.3"
-            ) {
-                SettingsVolumeSlider(
-                    value: $session.translatedVoiceVolume,
-                    range: 0...1
+            if !session.isUsingGPTTranscriptionMode {
+                SettingsToggleRow(
+                    title: AppText.voiceOutput,
+                    detail: SettingsCopy.dubbingDetail,
+                    systemImage: "speaker.wave.2",
+                    isOn: lockedSessionConfigurationBinding($session.isDubbingEnabled)
                 )
+                .disabled(isSessionConfigurationLocked)
+
+                SettingsControlRow(
+                    title: SettingsCopy.liveTranslationVolume,
+                    detail: SettingsCopy.liveTranslationVolumeDetail,
+                    systemImage: "speaker.wave.3"
+                ) {
+                    SettingsVolumeSlider(
+                        value: lockedSessionConfigurationBinding($session.translatedVoiceVolume),
+                        range: 0...1
+                    )
+                }
+                .disabled(isSessionConfigurationLocked)
             }
         }
     }
 
     private var transcriptSettings: some View {
         SettingsGroup(title: AppText.transcript) {
-            if session.isRunning {
+            if isSessionConfigurationLocked {
                 SettingsNoticeRow(text: SettingsCopy.captureRunningDisabledReason, systemImage: "pause.circle")
             }
 
@@ -367,7 +392,7 @@ struct SettingsView: View {
                 detail: session.sessionDurationMode.detail,
                 systemImage: "timer"
             ) {
-                Picker(AppText.sessionLength, selection: $session.sessionDurationMode) {
+                Picker(AppText.sessionLength, selection: lockedSessionConfigurationBinding($session.sessionDurationMode)) {
                     ForEach(SessionDurationMode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
@@ -375,7 +400,7 @@ struct SettingsView: View {
                 .pickerStyle(.segmented)
                 .labelsHidden()
                 .frame(width: 190)
-                .disabled(session.isRunning)
+                .disabled(isSessionConfigurationLocked)
             }
 
             SettingsControlRow(
@@ -385,33 +410,35 @@ struct SettingsView: View {
             ) {
                 Stepper(
                     AppText.seconds(session.paragraphBreakSilenceInterval),
-                    value: $session.paragraphBreakSilenceInterval,
+                    value: lockedSessionConfigurationBinding($session.paragraphBreakSilenceInterval),
                     in: 1...15,
                     step: 0.5
                 )
                 .frame(width: 104)
+                .disabled(isSessionConfigurationLocked)
             }
 
             SettingsToggleRow(
                 title: AppText.transcriptLint,
                 detail: AppText.transcriptLintDescription,
                 systemImage: "wand.and.sparkles",
-                isOn: $session.isTranscriptLintEnabled
+                isOn: lockedSessionConfigurationBinding($session.isTranscriptLintEnabled)
             )
-            .disabled(session.isUsingOpenAIRealtime)
+            .disabled(isSessionConfigurationLocked || session.isUsingOpenAIRealtime)
 
             SettingsControlRow(
                 title: AppText.savedTranscriptContent,
                 detail: AppText.autoSaveDescription,
                 systemImage: "archivebox"
             ) {
-                Picker(AppText.savedTranscriptContent, selection: $session.savedTranscriptContentMode) {
+                Picker(AppText.savedTranscriptContent, selection: lockedSessionConfigurationBinding($session.savedTranscriptContentMode)) {
                     ForEach(SavedTranscriptContentMode.allCases) { mode in
                         Text(mode.title).tag(mode)
                     }
                 }
                 .labelsHidden()
                 .frame(width: 170)
+                .disabled(isSessionConfigurationLocked)
             }
         }
     }
@@ -621,6 +648,9 @@ struct SettingsView: View {
     }
 
     private var selectedProcessingMode: SettingsProcessingMode {
+        if session.isUsingGPTTranscriptionMode {
+            return .gptTranscription
+        }
         if session.isUsingOpenAIRealtime {
             return .openAI
         }
@@ -630,16 +660,32 @@ struct SettingsView: View {
         return .apple
     }
 
+    private var isSessionConfigurationLocked: Bool {
+        session.isRunning || session.isStarting
+    }
+
+    private func lockedSessionConfigurationBinding<Value>(_ binding: Binding<Value>) -> Binding<Value> {
+        Binding(
+            get: { binding.wrappedValue },
+            set: { value in
+                guard !isSessionConfigurationLocked else { return }
+                binding.wrappedValue = value
+            }
+        )
+    }
+
     private var processingModeSelection: Binding<SettingsProcessingMode> {
         Binding {
             selectedProcessingMode
         } set: { mode in
-            guard !session.isRunning else { return }
+            guard !isSessionConfigurationLocked else { return }
             switch mode {
             case .apple:
                 session.useAppleDefaultMode()
             case .openAI:
                 session.useGPTRealtimeMode()
+            case .gptTranscription:
+                session.useGPTTranscriptionMode()
             case .gemini:
                 session.useGeminiTranslationMode()
             }
@@ -650,6 +696,7 @@ struct SettingsView: View {
         Binding {
             session.liveOutputMode
         } set: { mode in
+            guard !isSessionConfigurationLocked else { return }
             session.useLiveOutputMode(mode)
         }
     }
@@ -658,6 +705,7 @@ struct SettingsView: View {
         Binding {
             session.selectedModel
         } set: { model in
+            guard !isSessionConfigurationLocked else { return }
             switch model {
             case .appleSpeechOnly:
                 session.useTranscribeOnlyMode()
@@ -671,7 +719,7 @@ struct SettingsView: View {
         Binding {
             session.openAITranslationModel.isSupportedLiveTranslationModel ? session.openAITranslationModel : .gptRealtimeTranslate
         } set: { model in
-            guard !session.isRunning else { return }
+            guard !isSessionConfigurationLocked else { return }
             session.useGPTRealtimeMode(model: model)
         }
     }
@@ -807,6 +855,7 @@ private struct APIKeyStatusRow: View {
 private enum SettingsProcessingMode: String, CaseIterable, Identifiable {
     case apple
     case openAI
+    case gptTranscription
     case gemini
 
     var id: String { rawValue }
@@ -814,11 +863,23 @@ private enum SettingsProcessingMode: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .apple:
-            AppText.appleProcessingMode
+            "Apple"
         case .openAI:
-            "GPT Realtime"
+            AppText.localized(
+                english: "GPT Translate",
+                korean: "GPT 번역",
+                japanese: "GPT翻訳",
+                chineseSimplified: "GPT 翻译"
+            )
+        case .gptTranscription:
+            AppText.localized(
+                english: "GPT Transcribe",
+                korean: "GPT 전사",
+                japanese: "GPT文字起こし",
+                chineseSimplified: "GPT 转写"
+            )
         case .gemini:
-            "Gemini Live"
+            "Gemini"
         }
     }
 }
@@ -951,8 +1012,10 @@ private enum SettingsCopy {
     static let modeSettings = AppText.localized(english: "Mode Settings", korean: "모드 설정")
     static let processingEngine = AppText.localized(english: "Processing Mode", korean: "처리 방식")
     static let processingEngineDetail = AppText.localized(
-        english: "Choose exactly one active engine: local Apple mode, GPT Realtime, or Gemini Live Translate.",
-        korean: "Apple 기본 모드, GPT Realtime, Gemini 실시간 번역 중 하나만 활성화합니다."
+        english: "Choose exactly one active engine: local Apple mode, GPT Realtime, GPT Transcription, or Gemini Live Translate.",
+        korean: "Apple 기본 모드, GPT Realtime, GPT 전사, Gemini 실시간 번역 중 하나만 활성화합니다.",
+        japanese: "Appleローカルモード、GPT Realtime、GPT文字起こし、Gemini Live翻訳から1つだけ有効にします。",
+        chineseSimplified: "仅启用一种处理方式：Apple 本地模式、GPT Realtime、GPT 转写或 Gemini 实时翻译。"
     )
     static let enterOpenAIAPIKey = AppText.localized(
         english: "Enter OpenAI API key",
@@ -972,8 +1035,10 @@ private enum SettingsCopy {
         korean: "Apple 모드에서 번역 자막 또는 원문 전사만 중에서 선택합니다."
     )
     static let realtimeTranslationOutputOnly = AppText.localized(
-        english: "API live translation modes are translation-only. Choose Apple mode for source-only transcription.",
-        korean: "API 실시간 번역 모드는 번역 전용입니다. 원문 전사만 사용하려면 Apple 모드를 선택하세요."
+        english: "API live translation modes are translation-only. Choose Apple or GPT Transcription for source-only captions.",
+        korean: "API 실시간 번역 모드는 번역 전용입니다. 원문 자막만 필요하면 Apple 또는 GPT 전사를 선택하세요.",
+        japanese: "APIライブ翻訳モードは翻訳専用です。原文字幕のみの場合はAppleまたはGPT文字起こしを選択してください。",
+        chineseSimplified: "API 实时翻译模式仅用于翻译。若只需原文字幕，请选择 Apple 或 GPT 转写。"
     )
     static let languagePairDetail = AppText.localized(
         english: "Language pair is changed from the quick settings sidebar.",
