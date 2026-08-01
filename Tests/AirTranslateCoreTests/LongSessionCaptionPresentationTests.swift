@@ -33,7 +33,10 @@ struct LongSessionCaptionPresentationTests {
         try await Task.sleep(for: .milliseconds(80))
         #expect(session.lines.last?.revision == initialRevision)
 
-        #expect(await waitUntil(timeout: 0.6) {
+        // This assertion verifies eventual coalescing. The separate 50k burst
+        // test owns the MainActor latency budget, so allow parallel test work
+        // enough time to schedule the latest coalesced delivery.
+        #expect(await waitUntil(timeout: 2.0) {
             session.lines.last?.sourceText.hasSuffix("latest 100") == true
         })
         #expect(session.lines.last?.revision == initialRevision.map { $0 + 1 })

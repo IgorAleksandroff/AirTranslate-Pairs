@@ -147,6 +147,14 @@ extension LiveSpeechTranscriberDelegate {
 }
 
 final class LiveSpeechTranscriber: @unchecked Sendable {
+    private struct LifecycleResources {
+        let inputQueue: SpeechAnalyzerInputQueue<AnalyzerInput>?
+        let analyzer: SpeechAnalyzer?
+        let analyzeTask: Task<Void, Never>?
+        let resultTasks: [Task<Void, Never>]
+        let reservedLocales: [Locale]
+    }
+
     weak var delegate: LiveSpeechTranscriberDelegate?
 
     private static let reusablePCMBufferCount = 48
@@ -166,6 +174,7 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     private let stateLock = NSLock()
     private let conversionLock = NSLock()
     private let authorizationRequester: @Sendable () async -> Bool
+    private var lifecycleGeneration: UInt64 = 0
     private var isPaused = false
     private var reusablePCMBuffers = [AVAudioPCMBuffer?](
         repeating: nil,
@@ -207,6 +216,10 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     }
 
     func start(languages: [LanguageOption]) async throws {
+        let lifecycleTransition = takeLifecycleResources()
+        let lifecycleGeneration = lifecycleTransition.generation
+        cleanUp(lifecycleTransition.resources)
+
         do {
             let authorized = await authorizationRequester()
             // SFSpeechRecognizer's completion handler can resume after its
@@ -214,8 +227,7 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
             // or constructing an analyzer so that stale starts stay local.
             try Task.checkCancellation()
             guard authorized else { throw SpeechError.notAuthorized }
-
-            stop()
+            try ensureLifecycleIsCurrent(lifecycleGeneration)
 
             var seenLanguageIDs = Set<String>()
             let uniqueLanguages = languages.filter { language in
@@ -230,7 +242,17 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
                 try Task.checkCancellation()
 
                 try await AssetInventory.reserve(locale: supportedLocale)
-                reservedLocales.append(supportedLocale)
+                let didReserveForCurrentLifecycle = stateLock.withLock {
+                    guard self.lifecycleGeneration == lifecycleGeneration else {
+                        return false
+                    }
+                    reservedLocales.append(supportedLocale)
+                    return true
+                }
+                guard didReserveForCurrentLifecycle else {
+                    await AssetInventory.release(reservedLocale: supportedLocale)
+                    throw CancellationError()
+                }
                 try Task.checkCancellation()
                 transcribers.append((
                     language: language,
@@ -246,18 +268,27 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
             let inputQueue: SpeechAnalyzerInputQueue<AnalyzerInput> = makeInputQueue(
                 bufferLimit: Self.analyzerInputBufferLimit
             )
-            stateLock.withLock {
-                self.inputQueue = inputQueue
-            }
             let analyzer = SpeechAnalyzer(modules: modules)
-            self.analyzer = analyzer
+            let didPublishPreparationResources = stateLock.withLock {
+                guard self.lifecycleGeneration == lifecycleGeneration else {
+                    return false
+                }
+                self.inputQueue = inputQueue
+                self.analyzer = analyzer
+                return true
+            }
+            guard didPublishPreparationResources else {
+                inputQueue.finish()
+                await analyzer.cancelAndFinishNow()
+                throw CancellationError()
+            }
 
             try Task.checkCancellation()
             try await analyzer.prepareToAnalyze(in: audioFormat)
+            try ensureLifecycleIsCurrent(lifecycleGeneration)
             try Task.checkCancellation()
 
-            self.analyzer = analyzer
-            analyzeTask = Task { [weak self] in
+            let analyzeTask = Task { [weak self] in
                 do {
                     try await analyzer.start(inputSequence: inputQueue.stream)
                 } catch {
@@ -266,7 +297,7 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
                 }
             }
 
-            resultTasks = transcribers.map { entry in
+            let resultTasks = transcribers.map { entry in
                 Task { [weak self] in
                     do {
                         for try await result in entry.transcriber.results {
@@ -287,12 +318,28 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
                     }
                 }
             }
+            let didPublishRunningTasks = stateLock.withLock {
+                guard self.lifecycleGeneration == lifecycleGeneration else {
+                    return false
+                }
+                self.analyzeTask = analyzeTask
+                self.resultTasks = resultTasks
+                return true
+            }
+            guard didPublishRunningTasks else {
+                analyzeTask.cancel()
+                resultTasks.forEach { $0.cancel() }
+                inputQueue.finish()
+                await analyzer.cancelAndFinishNow()
+                throw CancellationError()
+            }
             try Task.checkCancellation()
+            try ensureLifecycleIsCurrent(lifecycleGeneration)
         } catch {
             // This instance may be a stale candidate which was never promoted
             // to TranslationSessionStore. Its cleanup must not rely on the
             // store's currently active generation.
-            stop()
+            stop(lifecycleGeneration: lifecycleGeneration)
             throw error
         }
     }
@@ -323,31 +370,83 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     }
 
     func stop() {
-        stateLock.lock()
-        isPaused = false
-        let inputQueue = inputQueue
-        self.inputQueue = nil
-        stateLock.unlock()
-        inputQueue?.finish()
-        analyzeTask?.cancel()
-        analyzeTask = nil
-        resultTasks.forEach { $0.cancel() }
-        resultTasks = []
+        let lifecycleTransition = takeLifecycleResources()
+        cleanUp(lifecycleTransition.resources)
+    }
+
+    private func stop(lifecycleGeneration: UInt64) {
+        guard let lifecycleTransition = takeLifecycleResources(
+            expectedGeneration: lifecycleGeneration
+        ) else {
+            return
+        }
+        cleanUp(lifecycleTransition.resources)
+    }
+
+    private func takeLifecycleResources() -> (
+        generation: UInt64,
+        resources: LifecycleResources
+    ) {
+        transitionLifecycle(expectedGeneration: nil)!
+    }
+
+    private func takeLifecycleResources(
+        expectedGeneration: UInt64
+    ) -> (generation: UInt64, resources: LifecycleResources)? {
+        transitionLifecycle(expectedGeneration: expectedGeneration)
+    }
+
+    private func transitionLifecycle(
+        expectedGeneration: UInt64?
+    ) -> (generation: UInt64, resources: LifecycleResources)? {
+        stateLock.withLock {
+            if let expectedGeneration,
+               lifecycleGeneration != expectedGeneration {
+                return nil
+            }
+
+            lifecycleGeneration &+= 1
+            isPaused = false
+            let resources = LifecycleResources(
+                inputQueue: inputQueue,
+                analyzer: analyzer,
+                analyzeTask: analyzeTask,
+                resultTasks: resultTasks,
+                reservedLocales: reservedLocales
+            )
+            inputQueue = nil
+            analyzer = nil
+            analyzeTask = nil
+            resultTasks = []
+            reservedLocales = []
+            return (lifecycleGeneration, resources)
+        }
+    }
+
+    private func cleanUp(_ resources: LifecycleResources) {
+        resources.inputQueue?.finish()
+        resources.analyzeTask?.cancel()
+        resources.resultTasks.forEach { $0.cancel() }
         resetReusablePCMBuffers()
 
-        if let analyzer {
+        if let analyzer = resources.analyzer {
             Task {
                 await analyzer.cancelAndFinishNow()
             }
         }
-        analyzer = nil
 
-        let localesToRelease = reservedLocales
-        reservedLocales = []
         Task {
-            for locale in localesToRelease {
+            for locale in resources.reservedLocales {
                 await AssetInventory.release(reservedLocale: locale)
             }
+        }
+    }
+
+    private func ensureLifecycleIsCurrent(_ expectedGeneration: UInt64) throws {
+        guard stateLock.withLock({
+            lifecycleGeneration == expectedGeneration
+        }) else {
+            throw CancellationError()
         }
     }
 
@@ -375,15 +474,13 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
 
 #if DEBUG
     var hasActiveResourcesForTesting: Bool {
-        stateLock.lock()
-        let hasInputQueue = inputQueue != nil
-        stateLock.unlock()
-
-        return analyzer != nil
-            || hasInputQueue
-            || analyzeTask != nil
-            || !resultTasks.isEmpty
-            || !reservedLocales.isEmpty
+        stateLock.withLock {
+            analyzer != nil
+                || inputQueue != nil
+                || analyzeTask != nil
+                || !resultTasks.isEmpty
+                || !reservedLocales.isEmpty
+        }
     }
 
     func makeInputQueueForTesting<Element: Sendable>(

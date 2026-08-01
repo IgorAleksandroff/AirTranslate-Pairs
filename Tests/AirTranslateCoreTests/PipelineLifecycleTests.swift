@@ -218,6 +218,33 @@ struct PipelineLifecycleTests {
     }
 
     @Test
+    func stopInvalidatesPermissionSuspendedAppleSpeechStartWithoutTaskCancellation() async {
+        let authorization = SuspendedSpeechAuthorization()
+        let transcriber = LiveSpeechTranscriber(
+            authorizationRequester: { await authorization.requestAuthorization() }
+        )
+        let start = Task.detached {
+            try await transcriber.start(languages: [.english])
+        }
+        await waitForPendingAuthorization(authorization)
+
+        transcriber.stop()
+        await authorization.resume(authorized: true)
+
+        let result = await start.result
+        let didCancel: Bool
+        switch result {
+        case .success:
+            didCancel = false
+        case .failure(let error):
+            didCancel = error is CancellationError
+        }
+
+        #expect(didCancel)
+        #expect(!transcriber.hasActiveResourcesForTesting)
+    }
+
+    @Test
     @MainActor
     func lateFirstPermissionResumeDoesNotUnlockOrStopNewerStart() async throws {
         let session = TranslationSessionStore(modelAvailabilityProvider: { _, _ in [:] })
@@ -243,6 +270,12 @@ struct PipelineLifecycleTests {
                 isStarting: session.isStarting
             )
         )
+
+        await session.simulatePipelineStartConfigurationErrorForTesting(
+            generation: firstGeneration
+        )
+        #expect(session.isPermissionSuspendedStartForTesting(generation: secondGeneration))
+        #expect(session.isStarting)
 
         session.resumePermissionSuspendedStartForTesting(generation: firstGeneration)
         await Task.yield()
@@ -281,8 +314,11 @@ struct PipelineLifecycleTests {
 
     @MainActor
     private func waitForPermissionSuspension(on session: TranslationSessionStore) async {
-        for _ in 0..<10 where !session.isPermissionSuspendedStartForTesting {
-            await Task.yield()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(500))
+        while !session.isPermissionSuspendedStartForTesting,
+              clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
         }
         #expect(session.isPermissionSuspendedStartForTesting)
     }
@@ -292,16 +328,21 @@ struct PipelineLifecycleTests {
         on session: TranslationSessionStore,
         generation: UInt64
     ) async {
-        for _ in 0..<10 where !session.isPermissionSuspendedStartForTesting(generation: generation) {
-            await Task.yield()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(500))
+        while !session.isPermissionSuspendedStartForTesting(generation: generation),
+              clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
         }
         #expect(session.isPermissionSuspendedStartForTesting(generation: generation))
     }
 
     @MainActor
     private func waitForStartCompletion(on session: TranslationSessionStore) async {
-        for _ in 0..<10 where session.isStarting {
-            await Task.yield()
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(500))
+        while session.isStarting, clock.now < deadline {
+            try? await Task.sleep(for: .milliseconds(10))
         }
         #expect(!session.isStarting)
     }
@@ -309,11 +350,13 @@ struct PipelineLifecycleTests {
     private func waitForPendingAuthorization(
         _ authorization: SuspendedSpeechAuthorization
     ) async {
-        for _ in 0..<50 {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(500))
+        while clock.now < deadline {
             if await authorization.isPending() {
                 return
             }
-            try? await Task.sleep(nanoseconds: 10_000_000)
+            try? await Task.sleep(for: .milliseconds(10))
         }
         let isPending = await authorization.isPending()
         #expect(isPending)

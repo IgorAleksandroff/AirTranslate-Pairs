@@ -39,6 +39,7 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
     private static let realtimeTranscriptPublishInterval: TimeInterval = 0.05
     static let maximumTrackedRealtimeTimelineItemCount = 256
     private static let missingLifecycleMetadataGraceRegistrations = 8
+    private static let missingLifecycleMetadataGraceSeconds: TimeInterval = 0.1
 
     enum OutputMode {
         case transcription
@@ -86,6 +87,11 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
     private var droppedAudioByteCount = 0
     private var audioTransportDegradationHandler:
         (@Sendable (RealtimeAudioTransportDegradation) -> Void)?
+    private var terminalTranscriptHandler: ((
+        _ text: String,
+        _ language: LanguageOption,
+        _ confidence: Double
+    ) -> Void)?
     private let proxyTranscriber = LiveSpeechTranscriber()
     private let realtimeTranscriptBufferLock = NSLock()
     private var realtimeTranscriptionPublishThrottles: [String: RealtimeTranscriptPublishThrottle] = [:]
@@ -95,12 +101,79 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
     private var isRealtimeTimelineOrderCacheDirty = true
     private var realtimeTimelineRetiredItemIDs = Set<String>()
     private var realtimeTimelineRetiredItemOrder: [String] = []
+    private var pendingRealtimeTimelineFlushTask: Task<Void, Never>?
+    private var realtimeTranscriptsPendingDelivery: [String] = []
+    private let realtimeTranscriptDeliveryCondition = NSCondition()
+    private var realtimeTranscriptDeliveryCounts: [UInt64: Int] = [:]
+    #if DEBUG
+    private var realtimeTranscriptsQueuedForDeliveryHook: (() -> Void)?
+    private var realtimeEventValidatedBeforeMutationHook: (() -> Void)?
+    private var realtimeTimelineMutationValidatedHook: (() -> Void)?
+    #endif
     private let realtimeTranslationInputPublishThrottle = RealtimeTranscriptPublishThrottle(
         publishInterval: OpenAIRealtimeTranscriber.realtimeTranscriptPublishInterval
     )
     private let realtimeTranslationOutputPublishThrottle = RealtimeTranscriptPublishThrottle(
         publishInterval: OpenAIRealtimeTranscriber.realtimeTranscriptPublishInterval
     )
+
+    #if DEBUG
+    var onRealtimeTranscriptsQueuedForDeliveryForTesting: (() -> Void)? {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return realtimeTranscriptsQueuedForDeliveryHook
+        }
+        set {
+            stateLock.lock()
+            realtimeTranscriptsQueuedForDeliveryHook = newValue
+            stateLock.unlock()
+        }
+    }
+
+    var onRealtimeEventValidatedBeforeMutationForTesting: (() -> Void)? {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return realtimeEventValidatedBeforeMutationHook
+        }
+        set {
+            stateLock.lock()
+            realtimeEventValidatedBeforeMutationHook = newValue
+            stateLock.unlock()
+        }
+    }
+
+    var onRealtimeTimelineMutationValidatedForTesting: (() -> Void)? {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return realtimeTimelineMutationValidatedHook
+        }
+        set {
+            stateLock.lock()
+            realtimeTimelineMutationValidatedHook = newValue
+            stateLock.unlock()
+        }
+    }
+    #endif
+
+    var onTerminalTranscriptReady: ((
+        _ text: String,
+        _ language: LanguageOption,
+        _ confidence: Double
+    ) -> Void)? {
+        get {
+            stateLock.lock()
+            defer { stateLock.unlock() }
+            return terminalTranscriptHandler
+        }
+        set {
+            stateLock.lock()
+            terminalTranscriptHandler = newValue
+            stateLock.unlock()
+        }
+    }
 
     func start(language: LanguageOption, model: OpenAIRealtimeTranscriptionModel) async throws {
         try await start(
@@ -243,8 +316,21 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
     }
 
     @discardableResult
-    func stop() -> UInt64 {
+    func stop(
+        flushingTerminalTranscriptsWith handler: ((
+            _ text: String,
+            _ language: LanguageOption,
+            _ confidence: Double
+        ) -> Void)? = nil
+    ) -> UInt64 {
         stateLock.lock()
+        let stoppingGeneration = connectionGeneration
+        let terminalTranscripts = resetRealtimeTranscriptBuffers(
+            flushingTerminalTranscripts: true
+        )
+        let terminalTranscriptDelegate = delegateStorage
+        let storedTerminalTranscriptHandler = terminalTranscriptHandler
+        let terminalTranscriptLanguage = language
         connectionGeneration &+= 1
         let stoppedGeneration = connectionGeneration
         let receiveTask = receiveTask
@@ -255,8 +341,22 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         pendingAudioSendCount = 0
         droppedAudioChunkCount = 0
         droppedAudioByteCount = 0
-        resetRealtimeTranscriptBuffers()
         stateLock.unlock()
+        waitForRealtimeTranscriptDeliveries(generation: stoppingGeneration)
+        terminalTranscripts.forEach { text in
+            if let handler {
+                handler(text, terminalTranscriptLanguage, 0.5)
+            } else if let storedTerminalTranscriptHandler {
+                storedTerminalTranscriptHandler(text, terminalTranscriptLanguage, 0.5)
+            } else {
+                terminalTranscriptDelegate?.liveSpeechTranscriber(
+                    proxyTranscriber,
+                    didRecognize: text,
+                    language: terminalTranscriptLanguage,
+                    confidence: 0.5
+                )
+            }
+        }
         receiveTask?.cancel()
         webSocketTask?.cancel(with: .goingAway, reason: nil)
         return stoppedGeneration
@@ -472,6 +572,15 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         let outputMode = outputMode
         stateLock.unlock()
 
+        #if DEBUG
+        if Self.isRealtimeTimelineMutationEvent(event.type) {
+            let hook = stateLock.withLock {
+                realtimeEventValidatedBeforeMutationHook
+            }
+            hook?()
+        }
+        #endif
+
         switch event.type {
         case "input_audio_buffer.committed",
             "session.input_audio_buffer.committed":
@@ -535,10 +644,6 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
                 itemID: event.itemID,
                 generation: generation
             )
-            publishFailureIfCurrent(
-                OpenAIRealtimeTranscriberError.transcriptionFailed,
-                generation: generation
-            )
         case "session.output_transcript.delta":
             guard outputMode == .translationOnly,
                   let delta = event.delta,
@@ -586,9 +691,38 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         itemID: String?,
         generation: UInt64
     ) {
-        guard shouldAcceptRealtimeTranscriptionDelta(itemID: itemID) else { return }
-        let shouldPublish = shouldPublishRealtimeTranscriptionDelta(itemID: itemID)
-        transcriptionThrottle(for: itemID).append(delta) { [weak self] text in
+        stateLock.lock()
+        guard connectionGeneration == generation else {
+            stateLock.unlock()
+            return
+        }
+        realtimeTranscriptBufferLock.lock()
+        if let itemID, !itemID.isEmpty,
+           realtimeTimelineItems[itemID]?.isTerminal == true {
+            realtimeTranscriptBufferLock.unlock()
+            stateLock.unlock()
+            return
+        }
+        let shouldPublish: Bool
+        if let itemID, !itemID.isEmpty {
+            shouldPublish = orderedInputTranscriptItemIDsLocked().first == itemID
+        } else {
+            shouldPublish = true
+        }
+        let throttleID = transcriptBufferID(for: itemID)
+        let throttle: RealtimeTranscriptPublishThrottle
+        if let existingThrottle = realtimeTranscriptionPublishThrottles[throttleID] {
+            throttle = existingThrottle
+        } else {
+            throttle = RealtimeTranscriptPublishThrottle(
+                publishInterval: Self.realtimeTranscriptPublishInterval
+            )
+            realtimeTranscriptionPublishThrottles[throttleID] = throttle
+        }
+        realtimeTranscriptBufferLock.unlock()
+        stateLock.unlock()
+
+        throttle.append(delta) { [weak self] text in
             guard shouldPublish else { return }
             self?.publishRecognizedTranscript(
                 text,
@@ -602,27 +736,14 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         finalText: String?,
         generation: UInt64
     ) {
-        let throttle: RealtimeTranscriptPublishThrottle
-        realtimeTranscriptBufferLock.lock()
-        throttle = realtimeTranscriptionPublishThrottles.removeValue(forKey: transcriptBufferID(for: itemID))
-            ?? RealtimeTranscriptPublishThrottle(publishInterval: Self.realtimeTranscriptPublishInterval)
-        realtimeTranscriptBufferLock.unlock()
-        let completedText = throttle.takeCompletedText(finalText: finalText)
-
-        guard let itemID, !itemID.isEmpty else {
-            if let completedText {
-                publishRecognizedTranscript(
-                    completedText,
-                    generation: generation
-                )
-            }
-            return
-        }
-
-        let completion = completeRealtimeTimelineItem(id: itemID, text: completedText)
-        completion.transcripts.forEach {
-            publishRecognizedTranscript($0, generation: generation)
-        }
+        let completion = completeRealtimeTimelineItem(
+            id: itemID,
+            finalText: finalText,
+            generation: generation,
+            isFailure: false
+        )
+        deliverPendingRealtimeTranscripts(generation: generation)
+        schedulePendingRealtimeTimelineFlushIfNeeded(generation: generation)
         if completion.didOverflow {
             publishFailureIfCurrent(
                 OpenAIRealtimeTranscriberError.timelineCapacityExceeded,
@@ -636,29 +757,20 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         generation: UInt64
     ) {
         guard let itemID, !itemID.isEmpty else { return }
-        removeRealtimeTranscriptionThrottle(itemID: itemID)
-        let completion = completeRealtimeTimelineItem(id: itemID, text: nil)
-        completion.transcripts.forEach {
-            publishRecognizedTranscript($0, generation: generation)
-        }
+        let completion = completeRealtimeTimelineItem(
+            id: itemID,
+            finalText: nil,
+            generation: generation,
+            isFailure: true
+        )
+        deliverPendingRealtimeTranscripts(generation: generation)
+        schedulePendingRealtimeTimelineFlushIfNeeded(generation: generation)
         if completion.didOverflow {
             publishFailureIfCurrent(
                 OpenAIRealtimeTranscriberError.timelineCapacityExceeded,
                 generation: generation
             )
         }
-    }
-
-    private func transcriptionThrottle(for itemID: String?) -> RealtimeTranscriptPublishThrottle {
-        let id = transcriptBufferID(for: itemID)
-        realtimeTranscriptBufferLock.lock()
-        defer { realtimeTranscriptBufferLock.unlock() }
-        if let throttle = realtimeTranscriptionPublishThrottles[id] {
-            return throttle
-        }
-        let throttle = RealtimeTranscriptPublishThrottle(publishInterval: Self.realtimeTranscriptPublishInterval)
-        realtimeTranscriptionPublishThrottles[id] = throttle
-        return throttle
     }
 
     private func transcriptBufferID(for itemID: String?) -> String {
@@ -668,21 +780,20 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         return itemID
     }
 
-    private func removeRealtimeTranscriptionThrottle(itemID: String) {
-        realtimeTranscriptBufferLock.lock()
-        let throttle = realtimeTranscriptionPublishThrottles.removeValue(
-            forKey: transcriptBufferID(for: itemID)
-        )
-        realtimeTranscriptBufferLock.unlock()
-        throttle?.reset()
-    }
-
     private func registerRealtimeTimelineItem(
         id: String,
         previousItemID: String?,
         carriesInputTranscript: Bool,
         generation: UInt64
     ) {
+        stateLock.lock()
+        guard connectionGeneration == generation else {
+            stateLock.unlock()
+            return
+        }
+        #if DEBUG
+        realtimeTimelineMutationValidatedHook?()
+        #endif
         realtimeTranscriptBufferLock.lock()
         if var item = realtimeTimelineItems[id] {
             item.previousItemID = previousItemID ?? item.previousItemID
@@ -702,10 +813,10 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         var readyTranscripts = drainCompletedRealtimeTranscriptsLocked()
         let retention = enforceRealtimeTimelineRetentionLimitLocked()
         readyTranscripts.append(contentsOf: retention.transcripts)
+        realtimeTranscriptsPendingDelivery.append(contentsOf: readyTranscripts)
         realtimeTranscriptBufferLock.unlock()
-        readyTranscripts.forEach {
-            publishRecognizedTranscript($0, generation: generation)
-        }
+        stateLock.unlock()
+        deliverPendingRealtimeTranscripts(generation: generation)
         if retention.didOverflow {
             publishFailureIfCurrent(
                 OpenAIRealtimeTranscriberError.timelineCapacityExceeded,
@@ -714,32 +825,52 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         }
     }
 
-    private func shouldAcceptRealtimeTranscriptionDelta(itemID: String?) -> Bool {
-        guard let itemID, !itemID.isEmpty else { return true }
-        realtimeTranscriptBufferLock.lock()
-        defer { realtimeTranscriptBufferLock.unlock() }
-        return realtimeTimelineItems[itemID]?.isTerminal != true
-    }
-
-    private func shouldPublishRealtimeTranscriptionDelta(itemID: String?) -> Bool {
-        guard let itemID, !itemID.isEmpty else { return true }
-        realtimeTranscriptBufferLock.lock()
-        defer { realtimeTranscriptBufferLock.unlock() }
-        return orderedInputTranscriptItemIDsLocked().first == itemID
-    }
-
     private func completeRealtimeTimelineItem(
-        id: String,
-        text: String?
+        id: String?,
+        finalText: String?,
+        generation: UInt64,
+        isFailure: Bool
     ) -> RealtimeTimelineCompletion {
+        stateLock.lock()
+        guard connectionGeneration == generation else {
+            stateLock.unlock()
+            return .empty
+        }
+        #if DEBUG
+        realtimeTimelineMutationValidatedHook?()
+        #endif
         realtimeTranscriptBufferLock.lock()
-        defer { realtimeTranscriptBufferLock.unlock() }
+        defer {
+            realtimeTranscriptBufferLock.unlock()
+            stateLock.unlock()
+        }
+
+        let throttle = realtimeTranscriptionPublishThrottles.removeValue(
+            forKey: transcriptBufferID(for: id)
+        ) ?? RealtimeTranscriptPublishThrottle(
+            publishInterval: Self.realtimeTranscriptPublishInterval
+        )
+        let completedText: String?
+        if isFailure {
+            throttle.reset()
+            completedText = nil
+        } else {
+            completedText = throttle.takeCompletedText(finalText: finalText)
+        }
+
+        guard let id, !id.isEmpty else {
+            if let completedText, !completedText.isEmpty {
+                realtimeTranscriptsPendingDelivery.append(completedText)
+            }
+            return .empty
+        }
 
         if var item = realtimeTimelineItems[id] {
             guard !item.isTerminal else { return .empty }
             item.carriesInputTranscript = true
             item.isTerminal = true
-            item.completedText = text
+            item.completedText = completedText
+            item.terminalAt = Date()
             realtimeTimelineItems[id] = item
         } else {
             realtimeTimelineRegistrationCounter += 1
@@ -749,15 +880,16 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
                 registrationOrder: realtimeTimelineRegistrationCounter,
                 hasLifecycleMetadata: false,
                 isTerminal: true,
-                completedText: text
+                completedText: completedText,
+                terminalAt: Date()
             )
         }
         isRealtimeTimelineOrderCacheDirty = true
         var readyTranscripts = drainCompletedRealtimeTranscriptsLocked()
         let retention = enforceRealtimeTimelineRetentionLimitLocked()
         readyTranscripts.append(contentsOf: retention.transcripts)
+        realtimeTranscriptsPendingDelivery.append(contentsOf: readyTranscripts)
         return RealtimeTimelineCompletion(
-            transcripts: readyTranscripts,
             didOverflow: retention.didOverflow
         )
     }
@@ -768,8 +900,10 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
             guard let item = realtimeTimelineItems[id] else { continue }
             if !item.hasLifecycleMetadata || hasUnresolvedPredecessorLocked(for: id) {
                 let registrationAge = realtimeTimelineRegistrationCounter - item.registrationOrder
+                let terminalAge = item.terminalAt.map { Date().timeIntervalSince($0) } ?? 0
                 guard item.isTerminal,
                       registrationAge >= Self.missingLifecycleMetadataGraceRegistrations
+                        || terminalAge >= Self.missingLifecycleMetadataGraceSeconds
                 else {
                     break
                 }
@@ -793,18 +927,226 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         if !isRealtimeTimelineOrderCacheDirty {
             return realtimeTimelineOrderCache
         }
+
+        var successors: [String: [String]] = [:]
+        var unresolvedPredecessorCount: [String: Int] = [:]
+        for (id, item) in realtimeTimelineItems {
+            if let predecessor = item.previousItemID,
+               predecessor != id,
+               realtimeTimelineItems[predecessor] != nil {
+                successors[predecessor, default: []].append(id)
+                unresolvedPredecessorCount[id] = 1
+            } else {
+                unresolvedPredecessorCount[id] = 0
+            }
+        }
+
+        let registrationOrder: (String) -> Int = {
+            self.realtimeTimelineItems[$0]?.registrationOrder ?? .max
+        }
+        let sortsLater: (String, String) -> Bool = { lhs, rhs in
+            let lhsOrder = registrationOrder(lhs)
+            let rhsOrder = registrationOrder(rhs)
+            return lhsOrder == rhsOrder ? lhs > rhs : lhsOrder > rhsOrder
+        }
+        var ready = unresolvedPredecessorCount
+            .compactMap { $0.value == 0 ? $0.key : nil }
+            .sorted(by: sortsLater)
+        var ranks: [String: Int] = [:]
+
+        while let id = ready.popLast() {
+            guard ranks[id] == nil else { continue }
+            ranks[id] = ranks.count
+            for successor in successors[id] ?? [] {
+                let remaining = max(0, (unresolvedPredecessorCount[successor] ?? 0) - 1)
+                unresolvedPredecessorCount[successor] = remaining
+                guard remaining == 0 else { continue }
+                let insertionIndex = ready.firstIndex {
+                    sortsLater(successor, $0)
+                } ?? ready.endIndex
+                ready.insert(successor, at: insertionIndex)
+            }
+        }
+
+        // A provider cycle has no valid causal order. Keep the cache total and
+        // deterministic so the bounded-retention path can handle malformed data.
+        let unranked = realtimeTimelineItems.keys
+            .filter { ranks[$0] == nil }
+            .sorted {
+                let lhsOrder = registrationOrder($0)
+                let rhsOrder = registrationOrder($1)
+                return lhsOrder == rhsOrder ? $0 < $1 : lhsOrder < rhsOrder
+            }
+        for id in unranked {
+            ranks[id] = ranks.count
+        }
+
         realtimeTimelineOrderCache = realtimeTimelineItems
             .filter { $0.value.carriesInputTranscript }
             .map(\.key)
-            .sorted { lhs, rhs in
-                if timelineItem(lhs, precedes: rhs) { return true }
-                if timelineItem(rhs, precedes: lhs) { return false }
-                let lhsOrder = realtimeTimelineItems[lhs]?.registrationOrder ?? .max
-                let rhsOrder = realtimeTimelineItems[rhs]?.registrationOrder ?? .max
-                return lhsOrder < rhsOrder
+            .sorted {
+                (ranks[$0] ?? .max) < (ranks[$1] ?? .max)
             }
         isRealtimeTimelineOrderCacheDirty = false
         return realtimeTimelineOrderCache
+    }
+
+    private func schedulePendingRealtimeTimelineFlushIfNeeded(generation: UInt64) {
+        stateLock.lock()
+        guard connectionGeneration == generation else {
+            stateLock.unlock()
+            return
+        }
+        realtimeTranscriptBufferLock.lock()
+        let hasPendingTerminalItem = realtimeTimelineItems.contains { id, item in
+            item.isTerminal
+                && (!item.hasLifecycleMetadata || hasUnresolvedPredecessorLocked(for: id))
+        }
+        guard hasPendingTerminalItem, pendingRealtimeTimelineFlushTask == nil else {
+            realtimeTranscriptBufferLock.unlock()
+            stateLock.unlock()
+            return
+        }
+        pendingRealtimeTimelineFlushTask = Task { [weak self] in
+            do {
+                try await Task.sleep(
+                    for: .seconds(Self.missingLifecycleMetadataGraceSeconds)
+                )
+            } catch {
+                return
+            }
+            self?.flushExpiredRealtimeTimelineItems(generation: generation)
+        }
+        realtimeTranscriptBufferLock.unlock()
+        stateLock.unlock()
+    }
+
+    #if DEBUG
+    private static func isRealtimeTimelineMutationEvent(_ type: String) -> Bool {
+        switch type {
+        case "input_audio_buffer.committed",
+            "session.input_audio_buffer.committed",
+            "conversation.item.created",
+            "conversation.item.input_audio_transcription.completed",
+            "session.input_audio_transcription.completed",
+            "session.input_transcription.completed",
+            "session.input_transcript.completed",
+            "session.input_transcript.done",
+            "conversation.item.input_audio_transcription.failed":
+            true
+        default:
+            false
+        }
+    }
+    #endif
+
+    private func flushExpiredRealtimeTimelineItems(generation: UInt64) {
+        stateLock.lock()
+        guard connectionGeneration == generation else {
+            stateLock.unlock()
+            return
+        }
+        realtimeTranscriptBufferLock.lock()
+        pendingRealtimeTimelineFlushTask = nil
+        let transcripts = drainCompletedRealtimeTranscriptsLocked()
+        realtimeTranscriptsPendingDelivery.append(contentsOf: transcripts)
+        realtimeTranscriptBufferLock.unlock()
+        stateLock.unlock()
+        deliverPendingRealtimeTranscripts(generation: generation)
+        schedulePendingRealtimeTimelineFlushIfNeeded(generation: generation)
+    }
+
+    private func deliverPendingRealtimeTranscripts(generation: UInt64) {
+        #if DEBUG
+        realtimeTranscriptBufferLock.lock()
+        let hasPendingTranscripts = !realtimeTranscriptsPendingDelivery.isEmpty
+        realtimeTranscriptBufferLock.unlock()
+        if hasPendingTranscripts {
+            let hook = stateLock.withLock {
+                realtimeTranscriptsQueuedForDeliveryHook
+            }
+            hook?()
+        }
+        #endif
+
+        stateLock.lock()
+        guard connectionGeneration == generation else {
+            stateLock.unlock()
+            return
+        }
+        let delegate = delegateStorage
+        let storedTerminalTranscriptHandler = terminalTranscriptHandler
+        guard delegate != nil || storedTerminalTranscriptHandler != nil else {
+            stateLock.unlock()
+            return
+        }
+        realtimeTranscriptBufferLock.lock()
+        let transcripts = realtimeTranscriptsPendingDelivery
+        realtimeTranscriptsPendingDelivery.removeAll()
+        realtimeTranscriptBufferLock.unlock()
+        guard !transcripts.isEmpty else {
+            stateLock.unlock()
+            return
+        }
+        let callbackLanguage = language
+        beginRealtimeTranscriptDelivery(generation: generation)
+        stateLock.unlock()
+
+        let deliveryThreadKey = realtimeTranscriptDeliveryThreadKey(generation: generation)
+        let deliveryDepth = (Thread.current.threadDictionary[deliveryThreadKey] as? Int) ?? 0
+        Thread.current.threadDictionary[deliveryThreadKey] = deliveryDepth + 1
+        defer {
+            if deliveryDepth == 0 {
+                Thread.current.threadDictionary.removeObject(forKey: deliveryThreadKey)
+            } else {
+                Thread.current.threadDictionary[deliveryThreadKey] = deliveryDepth
+            }
+            endRealtimeTranscriptDelivery(generation: generation)
+        }
+        transcripts.forEach { text in
+            if let storedTerminalTranscriptHandler {
+                storedTerminalTranscriptHandler(text, callbackLanguage, 0.5)
+            } else {
+                delegate?.liveSpeechTranscriber(
+                    proxyTranscriber,
+                    didRecognize: text,
+                    language: callbackLanguage,
+                    confidence: 0.5
+                )
+            }
+        }
+    }
+
+    private func beginRealtimeTranscriptDelivery(generation: UInt64) {
+        realtimeTranscriptDeliveryCondition.lock()
+        realtimeTranscriptDeliveryCounts[generation, default: 0] += 1
+        realtimeTranscriptDeliveryCondition.unlock()
+    }
+
+    private func endRealtimeTranscriptDelivery(generation: UInt64) {
+        realtimeTranscriptDeliveryCondition.lock()
+        let remaining = max(0, (realtimeTranscriptDeliveryCounts[generation] ?? 0) - 1)
+        if remaining == 0 {
+            realtimeTranscriptDeliveryCounts.removeValue(forKey: generation)
+            realtimeTranscriptDeliveryCondition.broadcast()
+        } else {
+            realtimeTranscriptDeliveryCounts[generation] = remaining
+        }
+        realtimeTranscriptDeliveryCondition.unlock()
+    }
+
+    private func waitForRealtimeTranscriptDeliveries(generation: UInt64) {
+        let deliveryThreadKey = realtimeTranscriptDeliveryThreadKey(generation: generation)
+        guard Thread.current.threadDictionary[deliveryThreadKey] == nil else { return }
+        realtimeTranscriptDeliveryCondition.lock()
+        while (realtimeTranscriptDeliveryCounts[generation] ?? 0) > 0 {
+            realtimeTranscriptDeliveryCondition.wait()
+        }
+        realtimeTranscriptDeliveryCondition.unlock()
+    }
+
+    private func realtimeTranscriptDeliveryThreadKey(generation: UInt64) -> String {
+        "OpenAIRealtimeTranscriber.\(ObjectIdentifier(self).hashValue).delivery.\(generation)"
     }
 
     private func enforceRealtimeTimelineRetentionLimitLocked() -> RealtimeTimelineRetentionResult {
@@ -865,16 +1207,6 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
             let expiredID = realtimeTimelineRetiredItemOrder.removeFirst()
             realtimeTimelineRetiredItemIDs.remove(expiredID)
         }
-    }
-
-    private func timelineItem(_ candidate: String, precedes itemID: String) -> Bool {
-        var cursor = realtimeTimelineItems[itemID]?.previousItemID
-        var visited = Set<String>()
-        while let current = cursor, visited.insert(current).inserted {
-            if current == candidate { return true }
-            cursor = realtimeTimelineItems[current]?.previousItemID
-        }
-        return false
     }
 
     private func appendRealtimeTranslationInputDelta(
@@ -1037,9 +1369,31 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         return connectionGeneration
     }
 
-    private func resetRealtimeTranscriptBuffers() {
+    @discardableResult
+    private func resetRealtimeTranscriptBuffers(
+        flushingTerminalTranscripts: Bool = false
+    ) -> [String] {
         realtimeTranscriptBufferLock.lock()
+        let terminalTranscripts: [String]
+        if flushingTerminalTranscripts {
+            let terminalTimelineTranscripts: [String] = orderedInputTranscriptItemIDsLocked().compactMap { id in
+                guard let item = realtimeTimelineItems[id],
+                      item.isTerminal,
+                      let text = item.completedText,
+                      !text.isEmpty
+                else {
+                    return nil
+                }
+                return text
+            }
+            terminalTranscripts = realtimeTranscriptsPendingDelivery + terminalTimelineTranscripts
+        } else {
+            terminalTranscripts = []
+        }
         let transcriptionThrottles = realtimeTranscriptionPublishThrottles.values
+        let pendingTimelineFlushTask = pendingRealtimeTimelineFlushTask
+        pendingRealtimeTimelineFlushTask = nil
+        realtimeTranscriptsPendingDelivery.removeAll()
         realtimeTranscriptionPublishThrottles.removeAll()
         realtimeTimelineItems.removeAll()
         realtimeTimelineRegistrationCounter = 0
@@ -1048,9 +1402,11 @@ final class OpenAIRealtimeTranscriber: @unchecked Sendable {
         realtimeTimelineRetiredItemIDs.removeAll()
         realtimeTimelineRetiredItemOrder.removeAll()
         realtimeTranscriptBufferLock.unlock()
+        pendingTimelineFlushTask?.cancel()
         transcriptionThrottles.forEach { $0.reset() }
         realtimeTranslationInputPublishThrottle.reset()
         realtimeTranslationOutputPublishThrottle.reset()
+        return terminalTranscripts
     }
 
     private func pcm16Base64AudioChunks(from sampleBuffer: CMSampleBuffer) -> [String] {
@@ -1386,15 +1742,12 @@ private struct OpenAIRealtimeErrorBody: Decodable {
 
 private enum OpenAIRealtimeTranscriberError: LocalizedError {
     case connectionFailed
-    case transcriptionFailed
     case timelineCapacityExceeded
 
     var errorDescription: String? {
         switch self {
         case .connectionFailed:
             AppText.openAIRealtimeConnectionFailed
-        case .transcriptionFailed:
-            AppText.openAIInvalidResponse
         case .timelineCapacityExceeded:
             AppText.openAIInvalidResponse
         }
@@ -1412,11 +1765,9 @@ private struct RealtimeTimelineRetentionResult {
 }
 
 private struct RealtimeTimelineCompletion {
-    let transcripts: [String]
     let didOverflow: Bool
 
     static let empty = RealtimeTimelineCompletion(
-        transcripts: [],
         didOverflow: false
     )
 }
@@ -1428,6 +1779,7 @@ private struct RealtimeTimelineItem {
     var hasLifecycleMetadata: Bool
     var isTerminal = false
     var completedText: String?
+    var terminalAt: Date?
 }
 
 private extension OpenAIRealtimeTranscriber.OutputMode {

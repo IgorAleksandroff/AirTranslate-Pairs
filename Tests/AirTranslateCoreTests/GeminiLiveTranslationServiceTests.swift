@@ -100,7 +100,7 @@ struct GeminiLiveTranslationServiceTests {
     @Test
     func preSetupAudioBufferDropsOldestChunksBeyondCap() {
         let service = GeminiLiveTranslationService()
-        let degradationRecorder = GeminiAudioDegradationRecorder()
+        let degradationRecorder = RealtimeAudioDegradationRecorder()
         service.onAudioTransportDegraded = { degradationRecorder.record($0) }
         let chunkCharacterCount = 40_000
         let chunks = ["A", "B", "C", "D"].map { String(repeating: $0, count: chunkCharacterCount) }
@@ -120,7 +120,7 @@ struct GeminiLiveTranslationServiceTests {
     @Test
     func saturatedSendWindowReportsDroppedAudioDuration() {
         let service = GeminiLiveTranslationService()
-        let degradationRecorder = GeminiAudioDegradationRecorder()
+        let degradationRecorder = RealtimeAudioDegradationRecorder()
         service.onAudioTransportDegraded = { degradationRecorder.record($0) }
         let fortyMillisecondsOfPCM16 = 16_000 * 2 * 40 / 1_000
 
@@ -310,23 +310,6 @@ struct GeminiLiveTranslationServiceTests {
             #expect(nsError.domain == NSPOSIXErrorDomain)
             #expect(nsError.code == Int(ECONNREFUSED))
         }
-    }
-}
-
-private final class GeminiAudioDegradationRecorder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storedEvents: [RealtimeAudioTransportDegradation] = []
-
-    var events: [RealtimeAudioTransportDegradation] {
-        lock.lock()
-        defer { lock.unlock() }
-        return storedEvents
-    }
-
-    func record(_ event: RealtimeAudioTransportDegradation) {
-        lock.lock()
-        storedEvents.append(event)
-        lock.unlock()
     }
 }
 

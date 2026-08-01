@@ -2,9 +2,22 @@ import Foundation
 import Testing
 @testable import AirTranslate
 
-private final class GPTLiveTranscriptionRecorder: LiveSpeechTranscriberDelegate {
-    private(set) var transcripts: [String] = []
-    private(set) var errors: [Error] = []
+private final class GPTLiveTranscriptionRecorder: LiveSpeechTranscriberDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var storedTranscripts: [String] = []
+    private var storedErrors: [Error] = []
+
+    var transcripts: [String] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedTranscripts
+    }
+
+    var errors: [Error] {
+        lock.lock()
+        defer { lock.unlock() }
+        return storedErrors
+    }
 
     func liveSpeechTranscriber(
         _ transcriber: LiveSpeechTranscriber,
@@ -12,28 +25,43 @@ private final class GPTLiveTranscriptionRecorder: LiveSpeechTranscriberDelegate 
         language: LanguageOption,
         confidence: Double
     ) {
-        transcripts.append(text)
+        lock.lock()
+        storedTranscripts.append(text)
+        lock.unlock()
     }
 
     func liveSpeechTranscriber(_ transcriber: LiveSpeechTranscriber, didFail error: Error) {
-        errors.append(error)
+        lock.lock()
+        storedErrors.append(error)
+        lock.unlock()
     }
 }
 
-private final class OpenAIAudioDegradationRecorder: @unchecked Sendable {
-    private let lock = NSLock()
-    private var storedEvents: [RealtimeAudioTransportDegradation] = []
+private func waitForSignal(_ semaphore: DispatchSemaphore) async -> Bool {
+    await withCheckedContinuation { continuation in
+        DispatchQueue.global().async {
+            continuation.resume(
+                returning: semaphore.wait(timeout: .now() + 1) == .success
+            )
+        }
+    }
+}
 
-    var events: [RealtimeAudioTransportDegradation] {
-        lock.lock()
-        defer { lock.unlock() }
-        return storedEvents
+private final class RealtimeTranscriptDeliveryPause: @unchecked Sendable {
+    private let didPause = DispatchSemaphore(value: 0)
+    private let mayResume = DispatchSemaphore(value: 0)
+
+    func pause() {
+        didPause.signal()
+        mayResume.wait()
     }
 
-    func record(_ event: RealtimeAudioTransportDegradation) {
-        lock.lock()
-        storedEvents.append(event)
-        lock.unlock()
+    func waitUntilPaused() async -> Bool {
+        await waitForSignal(didPause)
+    }
+
+    func resume() {
+        mayResume.signal()
     }
 }
 
@@ -162,6 +190,207 @@ struct GPTLiveTranscriptionModeTests {
     }
 
     @Test
+    func orphanTerminalRecoversAfterElapsedMetadataGrace() async throws {
+        let transcriber = OpenAIRealtimeTranscriber()
+        let recorder = GPTLiveTranscriptionRecorder()
+        transcriber.delegate = recorder
+
+        transcriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"orphan","transcript":"Final caption"}"#
+        )
+        #expect(recorder.transcripts.isEmpty)
+
+        try await Task.sleep(for: .milliseconds(150))
+
+        #expect(recorder.transcripts == ["Final caption"])
+        #expect(transcriber.trackedRealtimeTimelineItemCount == 0)
+    }
+
+    @Test
+    func terminalWithMissingPredecessorRecoversAfterElapsedMetadataGrace() async throws {
+        let transcriber = OpenAIRealtimeTranscriber()
+        let recorder = GPTLiveTranscriptionRecorder()
+        transcriber.delegate = recorder
+
+        transcriber.handleEventText(
+            #"{"type":"input_audio_buffer.committed","item_id":"last","previous_item_id":"missing"}"#
+        )
+        transcriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"last","transcript":"Last caption"}"#
+        )
+        #expect(recorder.transcripts.isEmpty)
+
+        try await Task.sleep(for: .milliseconds(150))
+
+        #expect(recorder.transcripts == ["Last caption"])
+        #expect(transcriber.trackedRealtimeTimelineItemCount == 0)
+    }
+
+    @Test
+    func immediateStopFlushesTerminalWithoutLateDuplicate() async throws {
+        let transcriber = OpenAIRealtimeTranscriber()
+        let recorder = GPTLiveTranscriptionRecorder()
+        transcriber.delegate = recorder
+
+        transcriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"last","transcript":"Final caption"}"#
+        )
+        #expect(recorder.transcripts.isEmpty)
+
+        transcriber.stop()
+        #expect(recorder.transcripts == ["Final caption"])
+
+        try await Task.sleep(for: .milliseconds(150))
+        #expect(recorder.transcripts == ["Final caption"])
+    }
+
+    @Test
+    func stopAtomicallyClaimsRegisteredTerminalPausedAfterDrain() async {
+        let transcriber = OpenAIRealtimeTranscriber()
+        let recorder = GPTLiveTranscriptionRecorder()
+        let deliveryPause = RealtimeTranscriptDeliveryPause()
+        transcriber.delegate = recorder
+        transcriber.onRealtimeTranscriptsQueuedForDeliveryForTesting = {
+            deliveryPause.pause()
+        }
+        transcriber.handleEventText(
+            #"{"type":"input_audio_buffer.committed","item_id":"last","previous_item_id":null}"#
+        )
+
+        let completionTask = Task.detached {
+            transcriber.handleEventText(
+                #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"last","transcript":"Registered final"}"#
+            )
+        }
+        let reachedDrain = await deliveryPause.waitUntilPaused()
+        transcriber.stop()
+        deliveryPause.resume()
+        await completionTask.value
+
+        #expect(reachedDrain)
+        #expect(recorder.transcripts == ["Registered final"])
+    }
+
+    @Test
+    func stopAtomicallyClaimsTerminalPausedAfterDelayedDrain() async throws {
+        let transcriber = OpenAIRealtimeTranscriber()
+        let recorder = GPTLiveTranscriptionRecorder()
+        let deliveryPause = RealtimeTranscriptDeliveryPause()
+        transcriber.delegate = recorder
+        transcriber.onRealtimeTranscriptsQueuedForDeliveryForTesting = {
+            deliveryPause.pause()
+        }
+        transcriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"last","transcript":"Delayed final"}"#
+        )
+
+        let reachedDrain = await deliveryPause.waitUntilPaused()
+        transcriber.stop()
+        deliveryPause.resume()
+        try await Task.sleep(for: .milliseconds(150))
+
+        #expect(reachedDrain)
+        #expect(recorder.transcripts == ["Delayed final"])
+    }
+
+    @Test
+    func staleCompletionPausedAfterValidationCannotMutateNextGeneration() async {
+        let transcriber = OpenAIRealtimeTranscriber()
+        let recorder = GPTLiveTranscriptionRecorder()
+        let validationPause = RealtimeTranscriptDeliveryPause()
+        transcriber.delegate = recorder
+        transcriber.handleEventText(
+            #"{"type":"input_audio_buffer.committed","item_id":"stale","previous_item_id":null}"#
+        )
+        let retiredGeneration = transcriber.currentConnectionGeneration
+        transcriber.onRealtimeEventValidatedBeforeMutationForTesting = {
+            validationPause.pause()
+        }
+
+        let staleEventTask = Task.detached {
+            transcriber.handleEventText(
+                #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"stale","transcript":"Stale final"}"#,
+                generation: retiredGeneration
+            )
+        }
+        let reachedValidation = await validationPause.waitUntilPaused()
+        transcriber.stop()
+        transcriber.onRealtimeEventValidatedBeforeMutationForTesting = nil
+        validationPause.resume()
+        await staleEventTask.value
+
+        transcriber.handleEventText(
+            #"{"type":"input_audio_buffer.committed","item_id":"fresh","previous_item_id":null}"#
+        )
+        transcriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"fresh","transcript":"Fresh final"}"#
+        )
+
+        #expect(reachedValidation)
+        #expect(recorder.transcripts == ["Fresh final"])
+    }
+
+    @Test
+    func itemIDLessCompletionQueuedAtomicallyBeforeConcurrentStop() async {
+        let transcriber = OpenAIRealtimeTranscriber()
+        let recorder = GPTLiveTranscriptionRecorder()
+        let mutationPause = RealtimeTranscriptDeliveryPause()
+        let stopStarted = DispatchSemaphore(value: 0)
+        transcriber.delegate = recorder
+        transcriber.onRealtimeTimelineMutationValidatedForTesting = {
+            mutationPause.pause()
+        }
+
+        let completionTask = Task.detached {
+            transcriber.handleEventText(
+                #"{"type":"conversation.item.input_audio_transcription.completed","transcript":"Itemless final"}"#
+            )
+        }
+        let reachedMutation = await mutationPause.waitUntilPaused()
+        let stopTask = Task.detached {
+            stopStarted.signal()
+            transcriber.stop()
+        }
+        let didStartStop = await waitForSignal(stopStarted)
+        await Task.yield()
+        mutationPause.resume()
+        await completionTask.value
+        await stopTask.value
+
+        #expect(reachedMutation)
+        #expect(didStartStop)
+        #expect(recorder.transcripts == ["Itemless final"])
+    }
+
+    @Test
+    func linkedAndUnlinkedItemsUseStableTopologicalOrder() {
+        let transcriber = OpenAIRealtimeTranscriber()
+        let recorder = GPTLiveTranscriptionRecorder()
+        transcriber.delegate = recorder
+
+        transcriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"child","transcript":"Child"}"#
+        )
+        transcriber.handleEventText(
+            #"{"type":"input_audio_buffer.committed","item_id":"unlinked","previous_item_id":null}"#
+        )
+        transcriber.handleEventText(
+            #"{"type":"input_audio_buffer.committed","item_id":"root","previous_item_id":null}"#
+        )
+        transcriber.handleEventText(
+            #"{"type":"input_audio_buffer.committed","item_id":"child","previous_item_id":"root"}"#
+        )
+        transcriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"root","transcript":"Root"}"#
+        )
+        transcriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"unlinked","transcript":"Unlinked"}"#
+        )
+
+        #expect(recorder.transcripts == ["Unlinked", "Root", "Child"])
+    }
+
+    @Test
     func longTimelineKeepsOnlyBoundedPendingState() {
         let transcriber = OpenAIRealtimeTranscriber()
         let recorder = GPTLiveTranscriptionRecorder()
@@ -211,7 +440,7 @@ struct GPTLiveTranscriptionModeTests {
     }
 
     @Test
-    func failedItemReleasesItsPerItemThrottle() {
+    func failedItemReleasesItsPerItemThrottleAndKeepsSessionUsable() {
         let transcriber = OpenAIRealtimeTranscriber()
         let recorder = GPTLiveTranscriptionRecorder()
         transcriber.delegate = recorder
@@ -227,9 +456,16 @@ struct GPTLiveTranscriptionModeTests {
         transcriber.handleEventText(
             #"{"type":"conversation.item.input_audio_transcription.failed","item_id":"failed"}"#
         )
+        transcriber.handleEventText(
+            #"{"type":"input_audio_buffer.committed","item_id":"next","previous_item_id":"failed"}"#
+        )
+        transcriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"next","transcript":"Recovered"}"#
+        )
 
         #expect(transcriber.realtimeTranscriptionThrottleCount == 0)
-        #expect(recorder.errors.count == 1)
+        #expect(recorder.errors.isEmpty)
+        #expect(recorder.transcripts.last == "Recovered")
     }
 
     @Test
@@ -271,7 +507,7 @@ struct GPTLiveTranscriptionModeTests {
     @Test
     func saturatedSendWindowReportsDroppedAudioDuration() {
         let transcriber = OpenAIRealtimeTranscriber()
-        let callbackRecorder = OpenAIAudioDegradationRecorder()
+        let callbackRecorder = RealtimeAudioDegradationRecorder()
         transcriber.onAudioTransportDegraded = { callbackRecorder.record($0) }
         let fortyMillisecondsOfPCM16 = 24_000 * 2 * 40 / 1_000
 
@@ -364,6 +600,86 @@ struct GPTLiveTranscriptionModeTests {
 
     @Test
     @MainActor
+    func itemTranscriptionFailureDoesNotStopButConnectionFailureStillDoes() async {
+        let session = TranslationSessionStore(modelAvailabilityProvider: { _, _ in [:] })
+        let pipeline = session.activateLiveCallbackPipelineForTesting()
+
+        pipeline.openAITranscriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.failed","item_id":"failed"}"#
+        )
+        await Task.yield()
+        #expect(session.isRunning)
+
+        pipeline.openAITranscriber.handleEventText(#"{"type":"error"}"#)
+        await Task.yield()
+        #expect(!session.isRunning)
+        #expect(session.statusMessage == AppText.openAIRealtimeConnectionFailed)
+    }
+
+    @Test
+    @MainActor
+    func storeStopFlushesLastTerminalBeforeTranscriptTeardown() {
+        let session = TranslationSessionStore(modelAvailabilityProvider: { _, _ in [:] })
+        let pipeline = session.activateLiveCallbackPipelineForTesting()
+
+        pipeline.openAITranscriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"last","transcript":"Saved final caption"}"#
+        )
+        session.stop()
+
+        #expect(!session.isRunning)
+        #expect(session.lines.contains(where: { $0.sourceText.contains("Saved final caption") }))
+    }
+
+    @Test
+    @MainActor
+    func storeStopClaimsRegisteredTerminalPausedAfterDrainBeforeAutosave() async {
+        let session = TranslationSessionStore(modelAvailabilityProvider: { _, _ in [:] })
+        let pipeline = session.activateLiveCallbackPipelineForTesting()
+        let transcriber = pipeline.openAITranscriber
+        let deliveryPause = RealtimeTranscriptDeliveryPause()
+        transcriber.onRealtimeTranscriptsQueuedForDeliveryForTesting = {
+            deliveryPause.pause()
+        }
+        transcriber.handleEventText(
+            #"{"type":"input_audio_buffer.committed","item_id":"last","previous_item_id":null}"#
+        )
+
+        let completionTask = Task.detached {
+            transcriber.handleEventText(
+                #"{"type":"conversation.item.input_audio_transcription.completed","item_id":"last","transcript":"Store final"}"#
+            )
+        }
+        let reachedDrain = await deliveryPause.waitUntilPaused()
+        session.stop()
+        deliveryPause.resume()
+        await completionTask.value
+
+        #expect(reachedDrain)
+        #expect(!session.isRunning)
+        #expect(
+            session.lines.filter { $0.sourceText.contains("Store final") }.count == 1
+        )
+    }
+
+    @Test
+    @MainActor
+    func storeStopFlushesItemIDLessTerminalBeforeAutosave() {
+        let session = TranslationSessionStore(modelAvailabilityProvider: { _, _ in [:] })
+        let pipeline = session.activateLiveCallbackPipelineForTesting()
+
+        pipeline.openAITranscriber.handleEventText(
+            #"{"type":"conversation.item.input_audio_transcription.completed","transcript":"Itemless store final"}"#
+        )
+        session.stop()
+
+        #expect(
+            session.lines.filter { $0.sourceText.contains("Itemless store final") }.count == 1
+        )
+    }
+
+    @Test
+    @MainActor
     func staleProxyRecognitionCannotPolluteRestartedStoreGeneration() async {
         let session = TranslationSessionStore(modelAvailabilityProvider: { _, _ in [:] })
         let firstPipeline = session.activateLiveCallbackPipelineForTesting()
@@ -382,7 +698,8 @@ struct GPTLiveTranscriptionModeTests {
         )
         await Task.yield()
 
-        #expect(!session.lines.contains(where: { $0.sourceText.contains("stale") }))
+        #expect(session.lines.contains(where: { $0.sourceText.contains("queued-stale") }))
+        #expect(!session.lines.contains(where: { $0.sourceText.contains("retired-stale") }))
         #expect(session.lines.contains(where: { $0.sourceText.contains("fresh") }))
         session.stop()
     }
@@ -423,28 +740,30 @@ struct GPTLiveTranscriptionModeTests {
     @Test
     @MainActor
     func restorePreservesGPTTranscriptionMode() {
-        let defaults = UserDefaults.standard
-        let keys = ["selectedModelID", "openAITranscriptionModelID", "openAITranslationModelID", "geminiTranslationModelID"]
-        let previous = Dictionary(uniqueKeysWithValues: keys.map { ($0, defaults.object(forKey: $0)) })
-        defer {
-            for key in keys {
-                if let value = previous[key] {
-                    defaults.set(value, forKey: key)
-                } else {
-                    defaults.removeObject(forKey: key)
+        StandardUserDefaultsTestLock.shared.withLock {
+            let defaults = UserDefaults.standard
+            let keys = ["selectedModelID", "openAITranscriptionModelID", "openAITranslationModelID", "geminiTranslationModelID"]
+            let previous = Dictionary(uniqueKeysWithValues: keys.map { ($0, defaults.object(forKey: $0)) })
+            defer {
+                for key in keys {
+                    if let value = previous[key] {
+                        defaults.set(value, forKey: key)
+                    } else {
+                        defaults.removeObject(forKey: key)
+                    }
                 }
             }
+            defaults.set(IntelligenceModel.appleSpeechOnly.rawValue, forKey: "selectedModelID")
+            defaults.set(OpenAIRealtimeTranscriptionModel.gptLiveTranscribe.rawValue, forKey: "openAITranscriptionModelID")
+            defaults.set(OpenAIRealtimeTranslationModel.gptRealtimeTranslate.rawValue, forKey: "openAITranslationModelID")
+            defaults.set(GeminiTranslationModel.gemini35LiveTranslate.rawValue, forKey: "geminiTranslationModelID")
+
+            let session = TranslationSessionStore(modelAvailabilityProvider: { _, _ in [:] })
+
+            #expect(session.isUsingGPTTranscriptionMode)
+            #expect(session.openAITranslationModel == .off)
+            #expect(session.geminiTranslationModel == .off)
+            #expect(session.selectedModel == .appleSpeechOnly)
         }
-        defaults.set(IntelligenceModel.appleSpeechOnly.rawValue, forKey: "selectedModelID")
-        defaults.set(OpenAIRealtimeTranscriptionModel.gptLiveTranscribe.rawValue, forKey: "openAITranscriptionModelID")
-        defaults.set(OpenAIRealtimeTranslationModel.gptRealtimeTranslate.rawValue, forKey: "openAITranslationModelID")
-        defaults.set(GeminiTranslationModel.gemini35LiveTranslate.rawValue, forKey: "geminiTranslationModelID")
-
-        let session = TranslationSessionStore(modelAvailabilityProvider: { _, _ in [:] })
-
-        #expect(session.isUsingGPTTranscriptionMode)
-        #expect(session.openAITranslationModel == .off)
-        #expect(session.geminiTranslationModel == .off)
-        #expect(session.selectedModel == .appleSpeechOnly)
     }
 }

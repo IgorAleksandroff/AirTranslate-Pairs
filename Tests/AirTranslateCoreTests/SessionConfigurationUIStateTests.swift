@@ -35,6 +35,17 @@ struct SessionConfigurationUIStateTests {
         #expect(idle.actionSystemImage == "play.fill")
         #expect(running.actionTitle == AppText.stop)
         #expect(running.actionSystemImage == "stop.fill")
+
+        let paused = MenuBarCapturePhase(
+            isRunning: true,
+            isStarting: false,
+            isPaused: true
+        )
+
+        #expect(paused == .paused)
+        #expect(paused.actionTitle == AppText.stop)
+        #expect(paused.actionSystemImage == "stop.fill")
+        #expect(paused.actionSubtitle(statusMessage: "ignored") == AppText.paused)
     }
 
     @Test

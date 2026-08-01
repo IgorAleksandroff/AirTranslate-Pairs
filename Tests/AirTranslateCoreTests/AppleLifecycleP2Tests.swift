@@ -138,7 +138,10 @@ struct AppleLifecycleP2Tests {
         await waitForStoppedPipeline(on: session)
 
         #expect(session.statusMessage == AppText.transcriptSavedToast)
-        #expect(savedTranscriptText(in: directory).contains("External user stop must save this transcript."))
+        #expect(await waitUntil {
+            savedTranscriptText(in: directory)
+                .contains("External user stop must save this transcript.")
+        })
         #expect(
             !SidebarSessionConfigurationAccess.isLocked(
                 isRunning: session.isRunning,
@@ -341,10 +344,8 @@ struct AppleLifecycleP2Tests {
 
     @MainActor
     private func waitForStoppedPipeline(on session: TranslationSessionStore) async {
-        for _ in 0..<50 where session.isRunning || session.isStarting {
-            await Task.yield()
-        }
-        #expect(!session.isRunning)
-        #expect(!session.isStarting)
+        #expect(await waitUntil {
+            !session.isRunning && !session.isStarting
+        })
     }
 }

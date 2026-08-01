@@ -151,7 +151,7 @@ AirTranslate 只请求捕获和转写流程需要的权限。
 最新开源构建可在 [GitHub Releases](https://github.com/himomohi/AirTranslate/releases/latest) 下载。DMG 是最简单的安装路径，ZIP 也会继续作为轻量压缩包提供。
 
 - [下载 AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [下载 AirTranslate-1.5.0.zip](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.5.0.zip)
+- [下载 AirTranslate-1.5.0.zip](https://github.com/himomohi/AirTranslate/releases/download/v1.5.0/AirTranslate-1.5.0.zip)
 - [下载 AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [查看版本历史](Release/VERSION-HISTORY.md)
 
@@ -174,7 +174,7 @@ cat AirTranslate.dmg.sha256
 - Swift 6.2 或更高版本
 - 支持系统音频捕获的 Mac
 - 可使用 Apple Speech 和 Apple Translation 框架的环境
-- 可选: GPT 模式需要 OpenAI API key
+- 可选: GPT 模式或 GPT 转写需要 OpenAI API key
 - 可选: Gemini Live 模式需要 Gemini API key
 
 ## 从源码构建

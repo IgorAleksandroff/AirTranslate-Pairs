@@ -153,7 +153,7 @@ macOS 개인정보 보호 권한을 바꾼 뒤에는 앱을 종료하고 다시 
 AirTranslate는 Apache-2.0 라이선스의 오픈소스 프로젝트입니다. DMG 파일은 macOS 사용자가 더 쉽게 설치할 수 있도록 추가로 제공되는 설치 패키지이며, 소스코드 공개를 대체하는 것이 아닙니다. 소스코드, 빌드 스크립트, 릴리즈 자료, LICENSE, NOTICE 파일은 모두 이 저장소에 공개되어 있습니다.
 
 - [AirTranslate.dmg 다운로드](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [AirTranslate-1.5.0.zip 다운로드](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate-1.5.0.zip)
+- [AirTranslate-1.5.0.zip 다운로드](https://github.com/himomohi/AirTranslate/releases/download/v1.5.0/AirTranslate-1.5.0.zip)
 - [AirTranslate.dmg.sha256 다운로드](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [버전 히스토리 보기](Release/VERSION-HISTORY.md)
 
@@ -176,7 +176,7 @@ cat AirTranslate.dmg.sha256
 - Swift 6.2 이상
 - 시스템 오디오 캡처를 지원하는 Mac
 - Apple Speech 및 Apple Translation 프레임워크 사용 가능 환경
-- 선택 사항: GPT 모드용 OpenAI API 키
+- 선택 사항: GPT 모드 또는 GPT 전사용 OpenAI API 키
 - 선택 사항: Gemini Live 모드용 Gemini API 키
 
 ## 소스에서 빌드

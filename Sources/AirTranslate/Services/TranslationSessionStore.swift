@@ -234,6 +234,32 @@ private final class AudioSamplePipelineRegistry: @unchecked Sendable {
     }
 }
 
+private struct OpenAITerminalTranscript: Sendable {
+    let text: String
+    let language: LanguageOption
+    let confidence: Double
+    let transcriber: OpenAIRealtimeTranscriber
+}
+
+private final class OpenAITerminalTranscriptMailbox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var transcripts: [OpenAITerminalTranscript] = []
+
+    func append(_ transcript: OpenAITerminalTranscript) {
+        lock.lock()
+        transcripts.append(transcript)
+        lock.unlock()
+    }
+
+    func drain() -> [OpenAITerminalTranscript] {
+        lock.lock()
+        let drained = transcripts
+        transcripts.removeAll()
+        lock.unlock()
+        return drained
+    }
+}
+
 struct AutoDetectionLanguageChangeConfirmation: Equatable {
     let currentLanguage: LanguageOption
     let detectedLanguage: LanguageOption
@@ -458,6 +484,8 @@ final class TranslationSessionStore {
     @ObservationIgnored private var openAITranscriber = OpenAIRealtimeTranscriber()
     @ObservationIgnored private var geminiLiveTranslator = GeminiLiveTranslationService()
     @ObservationIgnored nonisolated private let audioSamplePipelineRegistry = AudioSamplePipelineRegistry()
+    @ObservationIgnored nonisolated private let openAITerminalTranscriptMailbox =
+        OpenAITerminalTranscriptMailbox()
     private let translator = AppleTranslationService()
     private let openAITranslator = OpenAITranslationService()
     private let foundationTranscriptPolisher = FoundationTranscriptPolisher()
@@ -619,6 +647,7 @@ final class TranslationSessionStore {
         microphoneAudioCapture.delegate = self
         transcriber.delegate = self
         openAITranscriber.delegate = self
+        configureOpenAITerminalTranscriptDelivery(for: openAITranscriber)
         geminiLiveTranslator.delegate = self
         loadSavedTranscripts()
         loadProductHuntScreenshotDemoIfRequested()
@@ -758,11 +787,10 @@ final class TranslationSessionStore {
                     error: error
                 )
             } catch let error as PipelineStartError {
-                isStarting = false
-                isRunning = false
-                stopCaptioners()
-                await stopCapture()
-                statusMessage = AppText.startFailed(error.localizedDescription)
+                await handlePipelineStartError(
+                    error,
+                    generation: generation
+                )
             } catch {
                 await handleCaptureStartFailure(
                     error,
@@ -786,6 +814,8 @@ final class TranslationSessionStore {
         autoStartAfterModelAssetDownloadTask = nil
         transcriptCheckpointTask?.cancel()
         transcriptCheckpointTask = nil
+        openAITranscriber.stop()
+        flushOpenAITerminalTranscriptMailbox()
         flushPendingRecognizedCaption()
         flushPendingCaptionPresentation()
         let hadTranscriptToSave = !visibleTranscript().trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -803,7 +833,7 @@ final class TranslationSessionStore {
         } else if !hadTranscriptToSave {
             statusMessage = AppText.stopped
         }
-        stopCaptioners()
+        stopCaptioners(openAITranscriberAlreadyStopped: true)
         if didSaveTranscript {
             showToast(AppText.transcriptSavedToast)
         }
@@ -840,6 +870,25 @@ final class TranslationSessionStore {
             // stop() may have invalidated this task while a permission prompt
             // was suspended. It must not affect a newer generation, but it can
             // still have resumed and initialized the old captioners.
+            stopCaptionersIfOwned(by: generation)
+            return
+        }
+
+        isStarting = false
+        isRunning = false
+        stopCaptioners()
+        await stopCapture()
+        statusMessage = AppText.startFailed(error.localizedDescription)
+    }
+
+    private func handlePipelineStartError(
+        _ error: PipelineStartError,
+        generation: UInt64
+    ) async {
+        if pipelineLifecycle.isActive(generation: generation) {
+            _ = pipelineLifecycle.fail(generation: generation)
+        }
+        guard activeCaptureStartGeneration == generation else {
             stopCaptionersIfOwned(by: generation)
             return
         }
@@ -1708,6 +1757,7 @@ final class TranslationSessionStore {
         transcriber.delegate = self
         openAITranscriber = OpenAIRealtimeTranscriber()
         openAITranscriber.delegate = self
+        configureOpenAITerminalTranscriptDelivery(for: openAITranscriber)
         openAITranscriber.onAudioTransportDegraded = { [weak self, weak openAITranscriber] degradation in
             Task { @MainActor in
                 guard let self,
@@ -1819,7 +1869,7 @@ final class TranslationSessionStore {
         )
     }
 
-    private func stopCaptioners() {
+    private func stopCaptioners(openAITranscriberAlreadyStopped: Bool = false) {
         audioSamplePipelineRegistry.clear()
         activeCaptionerGeneration = nil
         openAITranscriber.onAudioTransportDegraded = nil
@@ -1828,8 +1878,45 @@ final class TranslationSessionStore {
         openAITranscriber.delegate = nil
         geminiLiveTranslator.delegate = nil
         transcriber.stop()
-        openAITranscriber.stop()
+        if !openAITranscriberAlreadyStopped {
+            openAITranscriber.stop()
+        }
         geminiLiveTranslator.stop()
+    }
+
+    private func flushOpenAITerminalTranscriptMailbox() {
+        openAITerminalTranscriptMailbox.drain().forEach { transcript in
+            guard transcript.transcriber === openAITranscriber,
+                  isRunning || isStarting
+            else {
+                return
+            }
+            enqueueRecognizedCaption(
+                sourceText: transcript.text,
+                recognizedLanguage: transcript.language,
+                confidence: transcript.confidence
+            )
+        }
+    }
+
+    private func configureOpenAITerminalTranscriptDelivery(
+        for transcriber: OpenAIRealtimeTranscriber
+    ) {
+        let terminalTranscriptMailbox = openAITerminalTranscriptMailbox
+        transcriber.onTerminalTranscriptReady = { [weak self, weak transcriber] text, language, confidence in
+            guard let transcriber else { return }
+            terminalTranscriptMailbox.append(
+                OpenAITerminalTranscript(
+                    text: text,
+                    language: language,
+                    confidence: confidence,
+                    transcriber: transcriber
+                )
+            )
+            Task { @MainActor [weak self] in
+                self?.flushOpenAITerminalTranscriptMailbox()
+            }
+        }
     }
 
     private func setCaptionersPaused(_ isPaused: Bool) {
@@ -4318,6 +4405,15 @@ final class TranslationSessionStore {
         permissionSuspendedStartContinuations[generation] != nil
     }
 
+    func simulatePipelineStartConfigurationErrorForTesting(
+        generation: UInt64
+    ) async {
+        await handlePipelineStartError(
+            .configurationChanged,
+            generation: generation
+        )
+    }
+
     func activateLiveCallbackPipelineForTesting() -> (
         generation: UInt64,
         transcriber: LiveSpeechTranscriber,
@@ -4332,6 +4428,7 @@ final class TranslationSessionStore {
         transcriber.delegate = self
         openAITranscriber = OpenAIRealtimeTranscriber()
         openAITranscriber.delegate = self
+        configureOpenAITerminalTranscriptDelivery(for: openAITranscriber)
         activeCaptionerGeneration = generation
         _ = pipelineLifecycle.markRunning(
             generation: generation,

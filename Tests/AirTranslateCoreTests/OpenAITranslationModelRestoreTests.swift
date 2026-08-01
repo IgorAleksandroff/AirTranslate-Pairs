@@ -32,17 +32,20 @@ struct OpenAITranslationModelRestoreTests {
 
     @MainActor
     private func withRestoredDefaults(value: String, assert: (TranslationSessionStore) -> Void) {
-        let defaults = UserDefaults.standard
-        let previousValue = defaults.string(forKey: Self.key)
-        defaults.set(value, forKey: Self.key)
+        StandardUserDefaultsTestLock.shared.withLock {
+            let defaults = UserDefaults.standard
+            let previousValue = defaults.object(forKey: Self.key)
+            defer {
+                if let previousValue {
+                    defaults.set(previousValue, forKey: Self.key)
+                } else {
+                    defaults.removeObject(forKey: Self.key)
+                }
+            }
+            defaults.set(value, forKey: Self.key)
 
-        let session = TranslationSessionStore(modelAvailabilityProvider: { _, _ in [:] })
-        assert(session)
-
-        if let previousValue {
-            defaults.set(previousValue, forKey: Self.key)
-        } else {
-            defaults.removeObject(forKey: Self.key)
+            let session = TranslationSessionStore(modelAvailabilityProvider: { _, _ in [:] })
+            assert(session)
         }
     }
 }
