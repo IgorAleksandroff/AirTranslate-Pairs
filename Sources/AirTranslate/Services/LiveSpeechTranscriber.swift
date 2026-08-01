@@ -146,13 +146,155 @@ extension LiveSpeechTranscriberDelegate {
     ) {}
 }
 
+struct SpeechAssetReservation: Sendable {
+    fileprivate let id: UInt64
+    let locale: Locale
+}
+
+private final class SpeechAssetAsyncMutex: @unchecked Sendable {
+    // This intentionally stays non-reentrant across the caller's awaits.
+    // An actor method would permit another reserve/release operation to enter
+    // while AssetInventory is suspended.
+    private let stateLock = NSLock()
+    private var isAcquired = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func acquire() async {
+        await withCheckedContinuation { continuation in
+            let shouldResumeImmediately = stateLock.withLock {
+                guard !isAcquired else {
+                    waiters.append(continuation)
+                    return false
+                }
+                isAcquired = true
+                return true
+            }
+            if shouldResumeImmediately {
+                continuation.resume()
+            }
+        }
+    }
+
+    func release() {
+        let nextWaiter: CheckedContinuation<Void, Never>? = stateLock.withLock {
+            guard !waiters.isEmpty else {
+                isAcquired = false
+                return nil
+            }
+            return waiters.removeFirst()
+        }
+        nextWaiter?.resume()
+    }
+}
+
+final class SpeechAssetReservationCoordinator: @unchecked Sendable {
+    typealias ReserveLocale = @Sendable (Locale) async throws -> Bool
+    typealias ReleaseLocale = @Sendable (Locale) async -> Bool
+
+    static let shared = SpeechAssetReservationCoordinator()
+
+    private struct LocaleOwners {
+        let locale: Locale
+        var reservationIDs: Set<UInt64>
+    }
+
+    private let mutex = SpeechAssetAsyncMutex()
+    private let reserveLocale: ReserveLocale
+    private let releaseLocale: ReleaseLocale
+    private var nextReservationID: UInt64 = 0
+    private var ownersByLocaleIdentifier: [String: LocaleOwners] = [:]
+
+    init(
+        reserveLocale: @escaping ReserveLocale = {
+            try await AssetInventory.reserve(locale: $0)
+        },
+        releaseLocale: @escaping ReleaseLocale = {
+            await AssetInventory.release(reservedLocale: $0)
+        }
+    ) {
+        self.reserveLocale = reserveLocale
+        self.releaseLocale = releaseLocale
+    }
+
+    func reserve(
+        locale: Locale,
+        claim: @escaping @Sendable (SpeechAssetReservation) -> Bool
+    ) async throws -> SpeechAssetReservation {
+        await mutex.acquire()
+        defer { mutex.release() }
+
+        try Task.checkCancellation()
+        let localeIdentifier = locale.identifier
+        let needsSystemReservation = ownersByLocaleIdentifier[localeIdentifier] == nil
+        if needsSystemReservation {
+            // A false result means the app already owns this global locale
+            // reservation. The coordinator still adopts it and releases it
+            // when its final logical owner exits.
+            _ = try await reserveLocale(locale)
+            do {
+                try Task.checkCancellation()
+            } catch {
+                _ = await releaseLocale(locale)
+                throw error
+            }
+        }
+
+        nextReservationID &+= 1
+        let reservation = SpeechAssetReservation(
+            id: nextReservationID,
+            locale: locale
+        )
+        guard claim(reservation) else {
+            if needsSystemReservation {
+                _ = await releaseLocale(locale)
+            }
+            throw CancellationError()
+        }
+
+        if var owners = ownersByLocaleIdentifier[localeIdentifier] {
+            owners.reservationIDs.insert(reservation.id)
+            ownersByLocaleIdentifier[localeIdentifier] = owners
+        } else {
+            ownersByLocaleIdentifier[localeIdentifier] = LocaleOwners(
+                locale: locale,
+                reservationIDs: [reservation.id]
+            )
+        }
+        return reservation
+    }
+
+    func release(_ reservation: SpeechAssetReservation) async {
+        await mutex.acquire()
+        defer { mutex.release() }
+
+        let localeIdentifier = reservation.locale.identifier
+        guard var owners = ownersByLocaleIdentifier[localeIdentifier],
+              owners.reservationIDs.remove(reservation.id) != nil
+        else {
+            return
+        }
+        guard owners.reservationIDs.isEmpty else {
+            ownersByLocaleIdentifier[localeIdentifier] = owners
+            return
+        }
+
+        ownersByLocaleIdentifier[localeIdentifier] = nil
+        _ = await releaseLocale(owners.locale)
+    }
+}
+
 final class LiveSpeechTranscriber: @unchecked Sendable {
     private struct LifecycleResources {
         let inputQueue: SpeechAnalyzerInputQueue<AnalyzerInput>?
         let analyzer: SpeechAnalyzer?
         let analyzeTask: Task<Void, Never>?
         let resultTasks: [Task<Void, Never>]
-        let reservedLocales: [Locale]
+        let assetReservations: [SpeechAssetReservation]
+    }
+
+    private struct LifecycleTransition {
+        let generation: UInt64
+        let cleanupTask: Task<Void, Never>
     }
 
     weak var delegate: LiveSpeechTranscriberDelegate?
@@ -170,11 +312,16 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     private var inputQueue: SpeechAnalyzerInputQueue<AnalyzerInput>?
     private var analyzeTask: Task<Void, Never>?
     private var resultTasks: [Task<Void, Never>] = []
-    private var reservedLocales: [Locale] = []
+    private var assetReservations: [SpeechAssetReservation] = []
     private let stateLock = NSLock()
     private let conversionLock = NSLock()
     private let authorizationRequester: @Sendable () async -> Bool
+    private let assetReservationCoordinator: SpeechAssetReservationCoordinator
+#if DEBUG
+    private var cleanupCompletionHookForTesting: (@Sendable () async -> Void)?
+#endif
     private var lifecycleGeneration: UInt64 = 0
+    private var cleanupTask: Task<Void, Never>?
     private var isPaused = false
     private var reusablePCMBuffers = [AVAudioPCMBuffer?](
         repeating: nil,
@@ -185,9 +332,11 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     init(
         authorizationRequester: @escaping @Sendable () async -> Bool = {
             await LiveSpeechTranscriber.requestAuthorization()
-        }
+        },
+        assetReservationCoordinator: SpeechAssetReservationCoordinator = .shared
     ) {
         self.authorizationRequester = authorizationRequester
+        self.assetReservationCoordinator = assetReservationCoordinator
     }
 
     static func installedSupportedLanguages(from languages: [LanguageOption]) async -> [LanguageOption] {
@@ -216,12 +365,14 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     }
 
     func start(languages: [LanguageOption]) async throws {
-        let lifecycleTransition = takeLifecycleResources()
+        let lifecycleTransition = takeLifecycleTransition()
         let lifecycleGeneration = lifecycleTransition.generation
-        cleanUp(lifecycleTransition.resources)
+        await lifecycleTransition.cleanupTask.value
 
         do {
-            let authorized = await authorizationRequester()
+            try await withTaskCancellationHandler {
+                try Task.checkCancellation()
+                let authorized = await authorizationRequester()
             // SFSpeechRecognizer's completion handler can resume after its
             // surrounding task was cancelled. Check before reserving locales
             // or constructing an analyzer so that stale starts stay local.
@@ -241,17 +392,17 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
                 }
                 try Task.checkCancellation()
 
-                try await AssetInventory.reserve(locale: supportedLocale)
-                let didReserveForCurrentLifecycle = stateLock.withLock {
-                    guard self.lifecycleGeneration == lifecycleGeneration else {
-                        return false
+                _ = try await assetReservationCoordinator.reserve(
+                    locale: supportedLocale
+                ) { [weak self] reservation in
+                    guard let self else { return false }
+                    return stateLock.withLock {
+                        guard self.lifecycleGeneration == lifecycleGeneration else {
+                            return false
+                        }
+                        assetReservations.append(reservation)
+                        return true
                     }
-                    reservedLocales.append(supportedLocale)
-                    return true
-                }
-                guard didReserveForCurrentLifecycle else {
-                    await AssetInventory.release(reservedLocale: supportedLocale)
-                    throw CancellationError()
                 }
                 try Task.checkCancellation()
                 transcribers.append((
@@ -335,11 +486,20 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
             }
             try Task.checkCancellation()
             try ensureLifecycleIsCurrent(lifecycleGeneration)
+            } onCancel: {
+                // A local candidate may never be published to
+                // TranslationSessionStore. Invalidate its generation as soon
+                // as its owning task is cancelled so an in-flight global
+                // reservation transaction cannot claim stale ownership.
+                _ = self.stop(lifecycleGeneration: lifecycleGeneration)
+            }
         } catch {
             // This instance may be a stale candidate which was never promoted
             // to TranslationSessionStore. Its cleanup must not rely on the
             // store's currently active generation.
-            stop(lifecycleGeneration: lifecycleGeneration)
+            if let cleanupTask = stop(lifecycleGeneration: lifecycleGeneration) {
+                await cleanupTask.value
+            }
             throw error
         }
     }
@@ -370,36 +530,37 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
     }
 
     func stop() {
-        let lifecycleTransition = takeLifecycleResources()
-        cleanUp(lifecycleTransition.resources)
+        _ = takeLifecycleTransition()
     }
 
-    private func stop(lifecycleGeneration: UInt64) {
-        guard let lifecycleTransition = takeLifecycleResources(
+    func stopAndWaitForCleanup() async {
+        let lifecycleTransition = takeLifecycleTransition()
+        await lifecycleTransition.cleanupTask.value
+    }
+
+    private func stop(lifecycleGeneration: UInt64) -> Task<Void, Never>? {
+        guard let lifecycleTransition = takeLifecycleTransition(
             expectedGeneration: lifecycleGeneration
         ) else {
-            return
+            return nil
         }
-        cleanUp(lifecycleTransition.resources)
+        return lifecycleTransition.cleanupTask
     }
 
-    private func takeLifecycleResources() -> (
-        generation: UInt64,
-        resources: LifecycleResources
-    ) {
+    private func takeLifecycleTransition() -> LifecycleTransition {
         transitionLifecycle(expectedGeneration: nil)!
     }
 
-    private func takeLifecycleResources(
+    private func takeLifecycleTransition(
         expectedGeneration: UInt64
-    ) -> (generation: UInt64, resources: LifecycleResources)? {
+    ) -> LifecycleTransition? {
         transitionLifecycle(expectedGeneration: expectedGeneration)
     }
 
     private func transitionLifecycle(
         expectedGeneration: UInt64?
-    ) -> (generation: UInt64, resources: LifecycleResources)? {
-        stateLock.withLock {
+    ) -> LifecycleTransition? {
+        let transition: LifecycleTransition? = stateLock.withLock {
             if let expectedGeneration,
                lifecycleGeneration != expectedGeneration {
                 return nil
@@ -412,34 +573,51 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
                 analyzer: analyzer,
                 analyzeTask: analyzeTask,
                 resultTasks: resultTasks,
-                reservedLocales: reservedLocales
+                assetReservations: assetReservations
             )
             inputQueue = nil
             analyzer = nil
             analyzeTask = nil
             resultTasks = []
-            reservedLocales = []
-            return (lifecycleGeneration, resources)
-        }
-    }
+            assetReservations = []
 
-    private func cleanUp(_ resources: LifecycleResources) {
-        resources.inputQueue?.finish()
-        resources.analyzeTask?.cancel()
-        resources.resultTasks.forEach { $0.cancel() }
-        resetReusablePCMBuffers()
+            // Detach and stop synchronous producers while holding the same
+            // lock that publishes the cleanup tail. A later start therefore
+            // cannot observe an empty lifecycle before this teardown is
+            // registered.
+            resources.inputQueue?.finish()
+            resources.analyzeTask?.cancel()
+            resources.resultTasks.forEach { $0.cancel() }
 
-        if let analyzer = resources.analyzer {
-            Task {
-                await analyzer.cancelAndFinishNow()
+            let previousCleanupTask = cleanupTask
+            let analyzer = resources.analyzer
+            let assetReservations = resources.assetReservations
+#if DEBUG
+            let cleanupCompletionHookForTesting = cleanupCompletionHookForTesting
+#endif
+            let assetReservationCoordinator = assetReservationCoordinator
+            let cleanupTask = Task {
+                await previousCleanupTask?.value
+                if let analyzer {
+                    await analyzer.cancelAndFinishNow()
+                }
+                for reservation in assetReservations {
+                    await assetReservationCoordinator.release(reservation)
+                }
+#if DEBUG
+                await cleanupCompletionHookForTesting?()
+#endif
             }
+            self.cleanupTask = cleanupTask
+            return LifecycleTransition(
+                generation: lifecycleGeneration,
+                cleanupTask: cleanupTask
+            )
         }
-
-        Task {
-            for locale in resources.reservedLocales {
-                await AssetInventory.release(reservedLocale: locale)
-            }
+        if transition != nil {
+            resetReusablePCMBuffers()
         }
+        return transition
     }
 
     private func ensureLifecycleIsCurrent(_ expectedGeneration: UInt64) throws {
@@ -479,7 +657,15 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
                 || inputQueue != nil
                 || analyzeTask != nil
                 || !resultTasks.isEmpty
-                || !reservedLocales.isEmpty
+                || !assetReservations.isEmpty
+        }
+    }
+
+    func setCleanupCompletionHookForTesting(
+        _ hook: (@Sendable () async -> Void)?
+    ) {
+        stateLock.withLock {
+            cleanupCompletionHookForTesting = hook
         }
     }
 

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AirTranslate
 
@@ -19,6 +20,94 @@ private actor SuspendedSpeechAuthorization {
         let continuation = self.continuation
         self.continuation = nil
         continuation?.resume(returning: authorized)
+    }
+}
+
+private actor SuspendedSpeechCleanup {
+    private var firstCleanupContinuation: CheckedContinuation<Void, Never>?
+    private(set) var cleanupCount = 0
+
+    func waitOnFirstCleanup() async {
+        cleanupCount += 1
+        guard cleanupCount == 1 else { return }
+        await withCheckedContinuation { continuation in
+            firstCleanupContinuation = continuation
+        }
+    }
+
+    func isFirstCleanupPending() -> Bool {
+        firstCleanupContinuation != nil
+    }
+
+    func resumeFirstCleanup() {
+        let continuation = firstCleanupContinuation
+        firstCleanupContinuation = nil
+        continuation?.resume()
+    }
+}
+
+private actor SpeechAuthorizationRecorder {
+    private(set) var requestCount = 0
+
+    func rejectAuthorization() -> Bool {
+        requestCount += 1
+        return false
+    }
+}
+
+private actor SuspendedAssetInventory {
+    private var firstReserveContinuation: CheckedContinuation<Void, Never>?
+    private(set) var reserveCallCount = 0
+    private(set) var releaseCallCount = 0
+    private(set) var isReserved = false
+    private(set) var events: [String] = []
+
+    func reserve(_ locale: Locale) async throws -> Bool {
+        reserveCallCount += 1
+        let call = reserveCallCount
+        events.append("reserve-\(call)-started")
+        if call == 1 {
+            await withCheckedContinuation { continuation in
+                firstReserveContinuation = continuation
+            }
+        }
+        let wasReserved = isReserved
+        isReserved = true
+        events.append("reserve-\(call)-finished")
+        return !wasReserved
+    }
+
+    func release(_ locale: Locale) -> Bool {
+        releaseCallCount += 1
+        events.append("release-\(releaseCallCount)")
+        let wasReserved = isReserved
+        isReserved = false
+        return wasReserved
+    }
+
+    func isFirstReservePending() -> Bool {
+        firstReserveContinuation != nil
+    }
+
+    func resumeFirstReserve() {
+        let continuation = firstReserveContinuation
+        firstReserveContinuation = nil
+        continuation?.resume()
+    }
+}
+
+private final class SpeechReservationClaimState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isCurrent = true
+
+    func invalidate() {
+        lock.withLock {
+            isCurrent = false
+        }
+    }
+
+    func claim(_ reservation: SpeechAssetReservation) -> Bool {
+        lock.withLock { isCurrent }
     }
 }
 
@@ -245,6 +334,101 @@ struct PipelineLifecycleTests {
     }
 
     @Test
+    func stopThenRestartWaitsForSerializedSpeechAssetCleanup() async {
+        let cleanup = SuspendedSpeechCleanup()
+        let authorization = SpeechAuthorizationRecorder()
+        let transcriber = LiveSpeechTranscriber(
+            authorizationRequester: {
+                await authorization.rejectAuthorization()
+            }
+        )
+        transcriber.setCleanupCompletionHookForTesting {
+            await cleanup.waitOnFirstCleanup()
+        }
+
+        transcriber.stop()
+        await waitForPendingCleanup(cleanup)
+
+        let restart = Task.detached {
+            try await transcriber.start(languages: [.english])
+        }
+        await Task.yield()
+
+        #expect(await authorization.requestCount == 0)
+
+        await cleanup.resumeFirstCleanup()
+        let restartResult = await restart.result
+
+        switch restartResult {
+        case .success:
+            Issue.record("Restart unexpectedly succeeded without authorization")
+        case .failure:
+            break
+        }
+        #expect(await authorization.requestCount == 1)
+        #expect(await cleanup.cleanupCount >= 2)
+        #expect(!transcriber.hasActiveResourcesForTesting)
+    }
+
+    @Test
+    func staleInFlightReserveReleasesBeforeNewOwnerAndCannotReleaseItLater() async throws {
+        let inventory = SuspendedAssetInventory()
+        let coordinator = SpeechAssetReservationCoordinator(
+            reserveLocale: { try await inventory.reserve($0) },
+            releaseLocale: { await inventory.release($0) }
+        )
+        let locale = Locale(identifier: "en-US")
+        let staleClaim = SpeechReservationClaimState()
+
+        let staleReserve = Task.detached {
+            try await coordinator.reserve(
+                locale: locale,
+                claim: staleClaim.claim
+            )
+        }
+        await waitForPendingReserve(inventory)
+
+        staleClaim.invalidate()
+        staleReserve.cancel()
+        let replacementReserve = Task.detached {
+            try await coordinator.reserve(locale: locale) { _ in true }
+        }
+        await inventory.resumeFirstReserve()
+
+        switch await staleReserve.result {
+        case .success:
+            Issue.record("Stale reservation unexpectedly claimed ownership")
+        case .failure(let error):
+            #expect(error is CancellationError)
+        }
+
+        let replacement = try await replacementReserve.value
+        #expect(await inventory.reserveCallCount == 2)
+        #expect(await inventory.releaseCallCount == 1)
+        #expect(await inventory.isReserved)
+        #expect(
+            await inventory.events == [
+                "reserve-1-started",
+                "reserve-1-finished",
+                "release-1",
+                "reserve-2-started",
+                "reserve-2-finished",
+            ]
+        )
+
+        let overlappingOwner = try await coordinator.reserve(locale: locale) { _ in true }
+        #expect(await inventory.reserveCallCount == 2)
+
+        await coordinator.release(replacement)
+        #expect(await inventory.releaseCallCount == 1)
+        #expect(await inventory.isReserved)
+
+        await coordinator.release(overlappingOwner)
+        #expect(await inventory.releaseCallCount == 2)
+        #expect(!(await inventory.isReserved))
+    }
+
+    @Test
     @MainActor
     func lateFirstPermissionResumeDoesNotUnlockOrStopNewerStart() async throws {
         let session = TranslationSessionStore(modelAvailabilityProvider: { _, _ in [:] })
@@ -360,6 +544,34 @@ struct PipelineLifecycleTests {
         }
         let isPending = await authorization.isPending()
         #expect(isPending)
+    }
+
+    private func waitForPendingCleanup(
+        _ cleanup: SuspendedSpeechCleanup
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(500))
+        while clock.now < deadline {
+            if await cleanup.isFirstCleanupPending() {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await cleanup.isFirstCleanupPending())
+    }
+
+    private func waitForPendingReserve(
+        _ inventory: SuspendedAssetInventory
+    ) async {
+        let clock = ContinuousClock()
+        let deadline = clock.now.advanced(by: .milliseconds(500))
+        while clock.now < deadline {
+            if await inventory.isFirstReservePending() {
+                return
+            }
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+        #expect(await inventory.isFirstReservePending())
     }
 
     private func makeConfiguration(

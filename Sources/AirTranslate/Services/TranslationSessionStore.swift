@@ -1829,6 +1829,14 @@ final class TranslationSessionStore {
         let candidate = LiveSpeechTranscriber()
         candidate.delegate = self
         do {
+            // stopCaptioners() intentionally returns synchronously so Stop
+            // never blocks MainActor. Before a replacement can reserve Speech
+            // assets, suspend until the old analyzer has cancelled and all of
+            // its locales have been released.
+            await transcriber.stopAndWaitForCleanup()
+            try Task.checkCancellation()
+            try validatePipelineStart(generation: generation, configuration: configuration)
+
             let languages = await appleSpeechLanguages(for: configuration)
             try Task.checkCancellation()
             try await candidate.start(languages: languages)
