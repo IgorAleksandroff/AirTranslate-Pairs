@@ -6,6 +6,24 @@ All notable changes to AirTranslate are documented in this file.
 
 No unreleased changes yet.
 
+## 1.5.1 - 2026-08-09
+
+### Added
+
+- Added per-permission rows with available status or System Settings verification guidance, focused settings actions and refresh, translation-asset progress/error/retry states, and app version/build details.
+
+### Changed
+
+- Redesigned the main workspace, sidebar, menu bar, floating captions, transcript library, and all Settings panes around one minimal visual system for spacing, icons, surfaces, selection, and hover feedback.
+- Settings now explain saved-versus-replacement API keys, show a floating-caption preview that follows the selected display mode, and make control dependencies easier to understand.
+- Improved keyboard navigation, selection identity, accessibility labels and values, and Reduce Motion behavior across the redesigned surfaces.
+
+### Fixed
+
+- Disabled the translated-voice volume control whenever voice output is unavailable or off, with an explicit explanation of the dependency.
+- Consolidated API-key persistence behind the session store so Settings no longer performs duplicate Keychain writes.
+- Made failed translation-language assets downloadable again and preserved each Settings pane's scroll identity while switching sections.
+
 ## 1.5.0 - 2026-08-02
 
 ### Added

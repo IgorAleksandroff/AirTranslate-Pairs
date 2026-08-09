@@ -47,6 +47,15 @@ The default workflow uses Apple frameworks. GPT Realtime and Gemini Live Transla
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
+## What's New in 1.5.1
+
+- **Minimal, consistent interface:** The workspace, sidebar, menu bar, floating captions, transcript library, and Settings now share one restrained system for spacing, icons, surfaces, selection, and hover feedback.
+- **Clearer settings status:** Separate permission rows show the available state or direct you to verify it in System Settings, language assets expose download progress and retry states, and the About pane shows the app version and build.
+- **More reliable settings controls:** Voice volume follows the voice-output state, API-key persistence uses one session-store path, and floating-caption previews follow the selected display mode.
+- **Keyboard and accessibility:** Settings preserve section identity while navigating, provide clearer accessibility labels and values, and respect Reduce Motion.
+
+See the complete [AirTranslate 1.5.1 release notes](https://github.com/himomohi/AirTranslate/releases/tag/v1.5.1).
+
 ## What's New in 1.5.0
 
 - **Apple Mode lifecycle hardening:** Apple Mode remains the default local-first path and now ignores late permission, warm-up, and capture callbacks from an older start attempt.
@@ -153,7 +162,7 @@ Download the latest open-source build from [GitHub Releases](https://github.com/
 AirTranslate remains fully open-source under the Apache-2.0 License. The DMG is provided only as a convenient macOS installer, while all source code, build scripts, release materials, LICENSE, and NOTICE files remain available in this repository.
 
 - [Download AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [Download AirTranslate-1.5.0.zip](https://github.com/himomohi/AirTranslate/releases/download/v1.5.0/AirTranslate-1.5.0.zip)
+- [Download AirTranslate-1.5.1.zip](https://github.com/himomohi/AirTranslate/releases/download/v1.5.1/AirTranslate-1.5.1.zip)
 - [Download AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [View version history](Release/VERSION-HISTORY.md)
 

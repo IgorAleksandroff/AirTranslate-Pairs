@@ -47,6 +47,15 @@ AirTranslate 可以捕获 Mac 正在播放的音频，实时转写并翻译，�
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
+## 1.5.1 主要更新
+
+- **简洁一致的界面:** 主工作区、侧边栏、菜单栏、悬浮字幕、记录库和设置现在共享一套克制的间距、图标、表面、选中与悬停反馈体系。
+- **更清晰的设置状态:** 各项权限会显示可获取的状态；无法直接读取时会引导用户前往系统设置确认。语言资源会显示下载进度、错误与重试状态，“关于”页面也会显示应用版本和构建号。
+- **更可靠的设置控制:** 音量会跟随语音输出状态启用或停用，API key 仅通过会话存储的一条路径保存，悬浮字幕预览会与所选显示模式同步。
+- **键盘与辅助功能:** 切换设置分区时会稳定保留选择状态，并提供更清晰的辅助功能标签与值，同时尊重“减弱动态效果”设置。
+
+完整内容请参阅 [AirTranslate 1.5.1 发布说明](https://github.com/himomohi/AirTranslate/releases/tag/v1.5.1)。
+
 ## 1.5.0 主要更新
 
 - **加强 Apple 默认模式生命周期:** Apple 默认模式仍是本地优先的默认路径；来自旧启动尝试的延迟授权响应、warm-up 和采集回调无法再改变新会话。
@@ -151,7 +160,7 @@ AirTranslate 只请求捕获和转写流程需要的权限。
 最新开源构建可在 [GitHub Releases](https://github.com/himomohi/AirTranslate/releases/latest) 下载。DMG 是最简单的安装路径，ZIP 也会继续作为轻量压缩包提供。
 
 - [下载 AirTranslate.dmg](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [下载 AirTranslate-1.5.0.zip](https://github.com/himomohi/AirTranslate/releases/download/v1.5.0/AirTranslate-1.5.0.zip)
+- [下载 AirTranslate-1.5.1.zip](https://github.com/himomohi/AirTranslate/releases/download/v1.5.1/AirTranslate-1.5.1.zip)
 - [下载 AirTranslate.dmg.sha256](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [查看版本历史](Release/VERSION-HISTORY.md)
 

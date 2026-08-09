@@ -1,5 +1,22 @@
 # AirTranslate Version History
 
+## 1.5.1 - 2026-08-09
+
+### Added
+
+- Per-permission rows with available status or System Settings verification guidance, refreshable permission state, translation-asset download progress/error/retry feedback, and visible app version/build details.
+
+### Changed
+
+- The workspace, sidebar, menu bar, floating captions, transcript library, and Settings now share a minimal design system with consistent spacing, icon sizing, surfaces, selection, and hover feedback.
+- Settings communicate API-key replacement, active control dependencies, caption-preview behavior, keyboard navigation, accessibility values, and Reduce Motion behavior more clearly.
+
+### Fixed
+
+- Voice volume is no longer interactive while translated voice output is unavailable or off.
+- API-key persistence uses one session-store path instead of duplicate Settings-level Keychain writes.
+- Failed translation-language assets can be retried, and each Settings section retains a stable scroll identity.
+
 ## 1.5.0 - 2026-08-02
 
 ### Added

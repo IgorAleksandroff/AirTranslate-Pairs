@@ -1,0 +1,119 @@
+name: Release Verify
+
+on:
+  push:
+    branches:
+      - "codex/release-airtranslate-*"
+  workflow_dispatch:
+
+concurrency:
+  group: release-verify-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Test, build, and package
+    runs-on: macos-26
+    timeout-minutes: 45
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Record toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Verify release lineage
+        run: git merge-base --is-ancestor v1.5.0 HEAD
+
+      - name: Verify packaging permissions
+        run: ./script/verify_packaging_permissions.sh
+
+      - name: Run full test suite
+        run: swift test
+
+      - name: Build release configuration
+        run: swift build -c release
+
+      - name: Build release artifacts
+        run: ./Release/build_open_source_release.sh all
+
+      - name: Verify disk images and checksums
+        run: |
+          hdiutil verify Release/product/AirTranslate.dmg
+          hdiutil verify Release/product/AirTranslate-1.5.1.dmg
+          cd Release/product
+          shasum -a 256 -c AirTranslate.dmg.sha256
+          shasum -a 256 -c AirTranslate-1.5.1.dmg.sha256
+
+      - name: Verify bundle and archive contents
+        run: |
+          app="Release/product/AirTranslate.app"
+          info="$app/Contents/Info.plist"
+          codesign --verify --deep --strict --verbose=2 "$app"
+          test "$(plutil -extract CFBundleShortVersionString raw -o - "$info")" = "1.5.1"
+          test "$(plutil -extract CFBundleVersion raw -o - "$info")" = "151"
+
+          codesign -d --entitlements :- "$app" 2>&1 \
+            | sed -n '/^<?xml/,/<\/plist>/p' \
+            > /tmp/airtranslate-release-entitlements.plist
+          test -s /tmp/airtranslate-release-entitlements.plist
+          test "$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.device.audio-input' /tmp/airtranslate-release-entitlements.plist)" = "true"
+          if /usr/libexec/PlistBuddy -c 'Print :com.apple.security.get-task-allow' /tmp/airtranslate-release-entitlements.plist >/dev/null 2>&1; then
+            echo "Release app must not contain get-task-allow." >&2
+            exit 1
+          fi
+
+          scan_root="$(mktemp -d)"
+          mount_point="$scan_root/mount"
+          trap 'hdiutil detach "$mount_point" >/dev/null 2>&1 || true; rm -rf "$scan_root"' EXIT
+          mkdir -p "$scan_root/build-zip" "$scan_root/stable-zip" "$mount_point"
+          ditto -x -k Release/product/AirTranslate-1.5.1-151.zip "$scan_root/build-zip"
+          ditto -x -k Release/product/AirTranslate-1.5.1.zip "$scan_root/stable-zip"
+          hdiutil attach -readonly -nobrowse -mountpoint "$mount_point" Release/product/AirTranslate.dmg
+
+          for root in "$scan_root/build-zip" "$scan_root/stable-zip" "$mount_point"; do
+            test -d "$root/AirTranslate.app"
+            test -f "$root/AirTranslate.app/Contents/Resources/LICENSE"
+            test -f "$root/AirTranslate.app/Contents/Resources/NOTICE"
+            test -f "$root/AirTranslate.app/Contents/Resources/AppIcon.icns"
+          done
+
+          diff -rq "$scan_root/build-zip/AirTranslate.app" "$scan_root/stable-zip/AirTranslate.app"
+          cmp Release/product/AirTranslate.dmg Release/product/AirTranslate-1.5.1.dmg
+
+          if find "$scan_root/build-zip" "$scan_root/stable-zip" "$mount_point" \
+            -type f \( -name '.env' -o -name '*.p12' -o -name '*.mobileprovision' \
+            -o -name '*.provisionprofile' -o -name '*.key' \) -print | grep -q .; then
+            echo "Sensitive file found in release artifacts." >&2
+            exit 1
+          fi
+
+          if rg -a -n --hidden \
+            '(sk-[A-Za-z0-9_-]{20,}|OPENAI_API_KEY\s*=\s*[A-Za-z0-9_-]+|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |OPENSSH |EC |DSA |)PRIVATE KEY-----)' \
+            "$scan_root/build-zip" "$scan_root/stable-zip" "$mount_point"; then
+            echo "Secret pattern found in release artifacts." >&2
+            exit 1
+          fi
+
+      - name: Upload verified release set
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: AirTranslate-1.5.1-151-release-set
+          path: |
+            Release/product/AirTranslate-1.5.1-151.zip
+            Release/product/AirTranslate-1.5.1.zip
+            Release/product/AirTranslate.dmg
+            Release/product/AirTranslate.dmg.sha256
+            Release/product/AirTranslate-1.5.1.dmg
+            Release/product/AirTranslate-1.5.1.dmg.sha256
+          if-no-files-found: error
+          retention-days: 7

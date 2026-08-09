@@ -47,6 +47,15 @@ AirTranslate는 Mac에서 재생되는 소리를 실시간으로 기록하고 �
 
 > "Turn any Mac audio into live captions and translation, right where you are watching."
 
+## 1.5.1 주요 변경사항
+
+- **미니멀하고 일관된 인터페이스:** 메인 작업 공간, 사이드바, 메뉴 막대, 플로팅 자막, 기록 보관함, 설정이 간격·아이콘·표면·선택·호버 피드백을 하나의 절제된 디자인 체계로 공유합니다.
+- **명확한 설정 상태:** 권한별로 확인 가능한 상태를 보여 주거나 시스템 설정에서 확인하도록 안내하고, 언어 자산 다운로드 진행·오류·재시도와 앱 버전·빌드 정보를 제공합니다.
+- **안정적인 설정 제어:** 음량은 음성 출력 상태에 맞춰 활성화되고, API 키 저장은 세션 저장소의 단일 경로를 사용하며, 플로팅 자막 미리보기는 선택한 표시 방식과 동기화됩니다.
+- **키보드와 접근성:** 설정 구간을 이동해도 선택 상태가 안정적으로 유지되고, 접근성 레이블·값과 동작 줄이기 환경을 더 충실히 지원합니다.
+
+전체 내용은 [AirTranslate 1.5.1 릴리즈 노트](https://github.com/himomohi/AirTranslate/releases/tag/v1.5.1)에서 확인할 수 있습니다.
+
 ## 1.5.0 주요 변경사항
 
 - **Apple 기본 모드 수명주기 강화:** Apple 기본 모드는 계속 로컬 우선 기본 경로이며, 이전 시작 시도의 늦은 권한 응답·warm-up·캡처 콜백이 새 세션을 바꾸지 못하게 합니다.
@@ -153,7 +162,7 @@ macOS 개인정보 보호 권한을 바꾼 뒤에는 앱을 종료하고 다시 
 AirTranslate는 Apache-2.0 라이선스의 오픈소스 프로젝트입니다. DMG 파일은 macOS 사용자가 더 쉽게 설치할 수 있도록 추가로 제공되는 설치 패키지이며, 소스코드 공개를 대체하는 것이 아닙니다. 소스코드, 빌드 스크립트, 릴리즈 자료, LICENSE, NOTICE 파일은 모두 이 저장소에 공개되어 있습니다.
 
 - [AirTranslate.dmg 다운로드](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg)
-- [AirTranslate-1.5.0.zip 다운로드](https://github.com/himomohi/AirTranslate/releases/download/v1.5.0/AirTranslate-1.5.0.zip)
+- [AirTranslate-1.5.1.zip 다운로드](https://github.com/himomohi/AirTranslate/releases/download/v1.5.1/AirTranslate-1.5.1.zip)
 - [AirTranslate.dmg.sha256 다운로드](https://github.com/himomohi/AirTranslate/releases/latest/download/AirTranslate.dmg.sha256)
 - [버전 히스토리 보기](Release/VERSION-HISTORY.md)
 

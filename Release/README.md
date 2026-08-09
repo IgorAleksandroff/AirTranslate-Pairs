@@ -13,7 +13,7 @@ This folder contains reproducible release materials for the Apache 2.0 open-sour
 
 - The app name remains `AirTranslate`.
 - The bundle identifier is `dev.appcaster.AirTranslate`.
-- The current release-candidate version is `1.5.0`.
+- The current release-candidate version is `1.5.1`.
 - The project is published as Apache 2.0 open source.
 - AirTranslate is an independent project and is not affiliated with Apple, OpenAI, or Google.
 - The release bundle must never include user API keys, bearer tokens, signing private keys, provisioning profiles, or local `.env` files.
@@ -21,7 +21,7 @@ This folder contains reproducible release materials for the Apache 2.0 open-sour
 Override the defaults when needed:
 
 ```bash
-BUNDLE_ID="com.example.AirTranslate" VERSION="1.5.0" BUILD_NUMBER="150"
+BUNDLE_ID="com.example.AirTranslate" VERSION="1.5.1" BUILD_NUMBER="151"
 ```
 
 ## Local Release Build
