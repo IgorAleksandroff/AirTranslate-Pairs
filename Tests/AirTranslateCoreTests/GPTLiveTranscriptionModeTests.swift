@@ -4,6 +4,7 @@ import Testing
 
 private final class GPTLiveTranscriptionRecorder: LiveSpeechTranscriberDelegate, @unchecked Sendable {
     private let lock = NSLock()
+    private let transcriptSignal = DispatchSemaphore(value: 0)
     private var storedTranscripts: [String] = []
     private var storedErrors: [Error] = []
 
@@ -28,12 +29,17 @@ private final class GPTLiveTranscriptionRecorder: LiveSpeechTranscriberDelegate,
         lock.lock()
         storedTranscripts.append(text)
         lock.unlock()
+        transcriptSignal.signal()
     }
 
     func liveSpeechTranscriber(_ transcriber: LiveSpeechTranscriber, didFail error: Error) {
         lock.lock()
         storedErrors.append(error)
         lock.unlock()
+    }
+
+    func waitForNextTranscript() async -> Bool {
+        await waitForSignal(transcriptSignal)
     }
 }
 
@@ -200,7 +206,7 @@ struct GPTLiveTranscriptionModeTests {
         )
         #expect(recorder.transcripts.isEmpty)
 
-        try await Task.sleep(for: .milliseconds(150))
+        #expect(await recorder.waitForNextTranscript())
 
         #expect(recorder.transcripts == ["Final caption"])
         #expect(transcriber.trackedRealtimeTimelineItemCount == 0)
@@ -220,7 +226,7 @@ struct GPTLiveTranscriptionModeTests {
         )
         #expect(recorder.transcripts.isEmpty)
 
-        try await Task.sleep(for: .milliseconds(150))
+        #expect(await recorder.waitForNextTranscript())
 
         #expect(recorder.transcripts == ["Last caption"])
         #expect(transcriber.trackedRealtimeTimelineItemCount == 0)
