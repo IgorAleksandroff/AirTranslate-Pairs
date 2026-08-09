@@ -1655,7 +1655,7 @@ private struct SettingsPermissionRow: View {
                     .foregroundStyle(status.color)
                     .accessibilityLabel("\(title): \(status.title)")
 
-                if status != .allowed {
+                if status != .allowed && status != .notDetermined {
                     Button(action: openSettings) {
                         Label(SettingsCopy.openSystemSettings, systemImage: "arrow.up.right.square")
                     }
