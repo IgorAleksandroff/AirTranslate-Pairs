@@ -6,8 +6,9 @@ enum GeminiAPIKeyStore {
     private static let account = "GEMINI_API_KEY"
 
     static func hasAPIKey() -> Bool {
-        guard let key = try? readAPIKey() else { return false }
-        return !key.isEmpty
+        var item: CFTypeRef?
+        let status = SecItemCopyMatching(presenceQuery() as CFDictionary, &item)
+        return status == errSecSuccess
     }
 
     static func readAPIKey() throws -> String? {
@@ -64,6 +65,14 @@ enum GeminiAPIKeyStore {
             kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
+    }
+
+    static func presenceQuery() -> [String: Any] {
+        var query = baseQuery()
+        query[kSecReturnAttributes as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        query[kSecUseAuthenticationUI as String] = kSecUseAuthenticationUISkip
+        return query
     }
 }
 

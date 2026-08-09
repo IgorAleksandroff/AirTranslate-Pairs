@@ -15,6 +15,7 @@
 
 - Voice volume is no longer interactive while translated voice output is unavailable or off.
 - API-key persistence uses one session-store path instead of duplicate Settings-level Keychain writes.
+- Startup API-key presence checks no longer read secret data or allow authentication UI before the first window appears.
 - Failed translation-language assets can be retried, and each Settings section retains a stable scroll identity.
 
 ## 1.5.0 - 2026-08-02

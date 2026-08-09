@@ -51,7 +51,7 @@ The default workflow uses Apple frameworks. GPT Realtime and Gemini Live Transla
 
 - **Minimal, consistent interface:** The workspace, sidebar, menu bar, floating captions, transcript library, and Settings now share one restrained system for spacing, icons, surfaces, selection, and hover feedback.
 - **Clearer settings status:** Separate permission rows show the available state or direct you to verify it in System Settings, language assets expose download progress and retry states, and the About pane shows the app version and build.
-- **More reliable settings controls:** Voice volume follows the voice-output state, API-key persistence uses one session-store path, and floating-caption previews follow the selected display mode.
+- **More reliable settings controls:** Voice volume follows the voice-output state, API-key persistence uses one session-store path, startup checks Keychain presence without reading secret data or showing authentication UI, and floating-caption previews follow the selected display mode.
 - **Keyboard and accessibility:** Settings preserve section identity while navigating, provide clearer accessibility labels and values, and respect Reduce Motion.
 
 See the complete [AirTranslate 1.5.1 release notes](https://github.com/himomohi/AirTranslate/releases/tag/v1.5.1).
