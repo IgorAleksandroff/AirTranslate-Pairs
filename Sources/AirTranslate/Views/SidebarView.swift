@@ -181,7 +181,6 @@ struct SidebarView: View {
             openSettings()
         }
         .help(AppText.configureTranslationSettings)
-        .accessibilityValue("\(AppText.configureTranslationSettings), \(value)")
     }
 
     private var apiKeyCard: some View {
@@ -195,8 +194,6 @@ struct SidebarView: View {
             openSettings()
         }
         .help(missingAPIKeyTitle)
-        .accessibilityValue(SettingsSidebarCopy.apiKeyAction)
-        .accessibilityHint(SettingsSidebarCopy.apiKeyAction)
     }
 
     private var storageRow: some View {
@@ -208,7 +205,6 @@ struct SidebarView: View {
             isLibraryPresented = true
         }
         .help(AppText.manageSavedTranscripts)
-        .accessibilityValue(AppText.manageSavedTranscripts)
     }
 
     private var quickSettingsTitle: String {

@@ -867,11 +867,13 @@ struct SettingsView: View {
     }
 
     private var appVersionSummary: String {
-        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+        let version = (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String)
+            .flatMap { $0.isEmpty ? nil : $0 }
+        let build = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
+            .flatMap { $0.isEmpty ? nil : $0 }
 
         return switch (version, build) {
-        case let (version?, build?) where !version.isEmpty && !build.isEmpty:
+        case let (version?, build?):
             "\(version) (\(build))"
         case let (version?, _):
             version

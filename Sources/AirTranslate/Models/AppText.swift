@@ -445,11 +445,21 @@ enum AppText {
     static let menuBarRunningTitle = localized(english: "Live", korean: "기록 중")
     static let menuBarPausedTitle = localized(english: "Paused", korean: "일시정지")
     static let floatingCaptions = localized(english: "Floating Captions", korean: "플로팅 자막")
-    static let showFloatingCaptions = localized(english: "Show Floating Captions", korean: "플로팅 자막 보기")
+    static let showFloatingCaptions = localized(
+        english: "Show Floating Captions",
+        korean: "플로팅 자막 보기",
+        japanese: "フローティング字幕を表示",
+        chineseSimplified: "显示悬浮字幕"
+    )
     static let floatingCaptionPowerOn = localized(english: "ON", korean: "켜짐")
     static let floatingCaptionPowerOff = localized(english: "OFF", korean: "꺼짐")
     static let captionsWindow = localized(english: "Caption Window", korean: "자막 창")
-    static let hideFloatingCaptions = localized(english: "Hide Floating Captions", korean: "플로팅 자막 숨기기")
+    static let hideFloatingCaptions = localized(
+        english: "Hide Floating Captions",
+        korean: "플로팅 자막 숨기기",
+        japanese: "フローティング字幕を隠す",
+        chineseSimplified: "隐藏悬浮字幕"
+    )
     static let openMainWindow = localized(english: "Open Main Window", korean: "메인 창 열기")
     static let floatingDisplay = localized(english: "Floating Display", korean: "플로팅 표시")
     static let floatingDisplayDescription = localized(

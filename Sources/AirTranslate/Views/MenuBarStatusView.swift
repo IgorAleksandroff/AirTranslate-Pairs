@@ -80,8 +80,8 @@ struct MenuBarStatusView: View {
                 IconPanelButtonLabel(
                     systemImage: isFloatingCaptionVisible ? "captions.bubble.fill" : "captions.bubble",
                     title: isFloatingCaptionVisible
-                        ? AppText.localized(english: "Hide captions", korean: "자막 숨기기", japanese: "字幕を隠す", chineseSimplified: "隐藏字幕")
-                        : AppText.localized(english: "Show captions", korean: "자막 보기", japanese: "字幕を表示", chineseSimplified: "显示字幕"),
+                        ? AppText.hideFloatingCaptions
+                        : AppText.showFloatingCaptions,
                     subtitle: isFloatingCaptionVisible ? AppText.floatingCaptionPowerOn : AppText.floatingCaptionPowerOff,
                     accentColor: isFloatingCaptionVisible ? .green : .secondary,
                     isSelected: isFloatingCaptionVisible
