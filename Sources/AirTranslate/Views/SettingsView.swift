@@ -12,9 +12,9 @@ struct SettingsView: View {
     @State private var geminiAPIKey = ""
     @State private var geminiKeyFeedback: APIKeyFeedback?
     @State private var isConfirmingGeminiKeyRemoval = false
-    @State private var screenRecordingPermission: SettingsPermissionState = .notGranted
-    @State private var microphonePermission: SettingsPermissionState = .notDetermined
-    @State private var speechRecognitionPermission: SettingsPermissionState = .notDetermined
+    @State private var screenRecordingPermission: SettingsPermissionState = .unknown
+    @State private var microphonePermission: SettingsPermissionState = .unknown
+    @State private var speechRecognitionPermission: SettingsPermissionState = .unknown
 
     var body: some View {
         HStack(spacing: 0) {
@@ -1559,7 +1559,7 @@ private struct FloatingCaptionPreview: View {
                 .background(.black.opacity(0.76), in: RoundedRectangle(cornerRadius: AirTranslateDesign.surfaceRadius, style: .continuous))
                 .accessibilityElement(children: .contain)
             }
-            .frame(height: previewHeight)
+            .frame(minHeight: previewHeight)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
     }
