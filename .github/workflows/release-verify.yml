@@ -37,6 +37,13 @@ jobs:
       - name: Verify packaging permissions
         run: ./script/verify_packaging_permissions.sh
 
+      - name: Stress metadata-grace regression
+        run: |
+          for attempt in {1..20}; do
+            echo "Metadata-grace regression attempt $attempt/20"
+            swift test --filter 'GPTLiveTranscriptionModeTests\.(orphanTerminalRecoversAfterElapsedMetadataGrace|terminalWithMissingPredecessorRecoversAfterElapsedMetadataGrace)'
+          done
+
       - name: Run full test suite
         run: swift test
 
