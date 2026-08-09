@@ -23,6 +23,7 @@ No unreleased changes yet.
 - Disabled the translated-voice volume control whenever voice output is unavailable or off, with an explicit explanation of the dependency.
 - Consolidated API-key persistence behind the session store so Settings no longer performs duplicate Keychain writes.
 - Made startup API-key presence checks noninteractive so an updated ad-hoc build cannot block the first app window while macOS protects an existing Keychain item.
+- Made the About pane read version and build metadata from the running packaged app, even when another local AirTranslate copy shares the same bundle identifier.
 - Made failed translation-language assets downloadable again and preserved each Settings pane's scroll identity while switching sections.
 
 ## 1.5.0 - 2026-08-02

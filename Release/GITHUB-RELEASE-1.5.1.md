@@ -21,6 +21,7 @@ AirTranslate is an independent open-source project and is not affiliated with Ap
 - The translated-voice volume control is now disabled while voice output is unavailable or off.
 - API-key persistence now has one session-store writer instead of duplicate Settings-level Keychain writes.
 - Startup now checks only non-secret Keychain metadata without showing authentication UI; the actual key is read only when an opted-in provider mode needs it.
+- The About pane now reports the version and build from the packaged app that is actually running, even if another local copy has the same bundle identifier.
 - Failed translation-language assets can be downloaded again, and switching Settings sections no longer reuses an unrelated scroll position.
 
 ## Scope
