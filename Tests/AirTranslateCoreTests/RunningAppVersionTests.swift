@@ -5,6 +5,15 @@ import Testing
 @Suite(.serialized)
 struct RunningAppVersionTests {
     @Test
+    func resolvesTheExecutableLoadedByTheCurrentProcess() {
+        let executableURL = RunningAppVersion.processExecutableURL()
+
+        #expect(executableURL.isFileURL)
+        #expect(executableURL.path.hasPrefix("/"))
+        #expect(FileManager.default.fileExists(atPath: executableURL.path))
+    }
+
+    @Test
     func readsMetadataBesideTheRunningExecutableBeforeUsingFallbackBundleInfo() throws {
         let rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)

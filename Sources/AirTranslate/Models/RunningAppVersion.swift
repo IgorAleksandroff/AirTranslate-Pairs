@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 struct RunningAppVersion: Equatable {
@@ -18,7 +19,7 @@ struct RunningAppVersion: Equatable {
     }
 
     static func current(
-        executableURL: URL = URL(fileURLWithPath: CommandLine.arguments[0]),
+        executableURL: URL = processExecutableURL(),
         fallbackInfoDictionary: [String: Any] = Bundle.main.infoDictionary ?? [:]
     ) -> RunningAppVersion {
         let infoDictionary = packagedInfoDictionary(for: executableURL) ?? fallbackInfoDictionary
@@ -30,6 +31,22 @@ struct RunningAppVersion: Equatable {
                 infoDictionary["CFBundleVersion"]
             )
         )
+    }
+
+    static func processExecutableURL() -> URL {
+        var requiredSize: UInt32 = 0
+        _NSGetExecutablePath(nil, &requiredSize)
+
+        var buffer = [CChar](repeating: 0, count: Int(requiredSize))
+        let status = buffer.withUnsafeMutableBufferPointer {
+            _NSGetExecutablePath($0.baseAddress, &requiredSize)
+        }
+
+        guard status == 0 else {
+            return URL(fileURLWithPath: CommandLine.arguments[0]).standardizedFileURL
+        }
+
+        return URL(fileURLWithPath: String(cString: buffer)).standardizedFileURL
     }
 
     private static func packagedInfoDictionary(for executableURL: URL) -> [String: Any]? {
