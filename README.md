@@ -149,6 +149,7 @@ AirTranslate asks for the permissions required by its capture and transcription 
 
 - Screen Recording
 - System Audio Recording
+- Microphone (only when microphone input is selected)
 - Speech Recognition
 
 Screen Recording is required because ScreenCaptureKit provides the system-audio capture path. AirTranslate does not save screen frames as recordings.

@@ -97,11 +97,22 @@ jobs:
             exit 1
           fi
 
-          if rg -a -n --hidden \
-            '(sk-[A-Za-z0-9_-]{20,}|OPENAI_API_KEY\s*=\s*[A-Za-z0-9_-]+|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |OPENSSH |EC |DSA |)PRIVATE KEY-----)' \
-            "$scan_root/build-zip" "$scan_root/stable-zip" "$mount_point"; then
+          secret_pattern='(sk-[A-Za-z0-9_-]{20,}|OPENAI_API_KEY[[:space:]]*=[[:space:]]*[A-Za-z0-9_-]+|ghp_[A-Za-z0-9_]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN (RSA |OPENSSH |EC |DSA |)PRIVATE KEY-----)'
+          set +e
+          /usr/bin/grep -aERn \
+            "$secret_pattern" \
+            "$scan_root/build-zip/AirTranslate.app" \
+            "$scan_root/stable-zip/AirTranslate.app" \
+            "$mount_point/AirTranslate.app"
+          scan_status=$?
+          set -e
+          if [[ "$scan_status" -eq 0 ]]; then
             echo "Secret pattern found in release artifacts." >&2
             exit 1
+          fi
+          if [[ "$scan_status" -ne 1 ]]; then
+            echo "Secret scanner failed with status $scan_status." >&2
+            exit "$scan_status"
           fi
 
       - name: Upload verified release set
