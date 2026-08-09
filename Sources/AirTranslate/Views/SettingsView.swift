@@ -1,3 +1,6 @@
+import AVFoundation
+import CoreGraphics
+import Speech
 import SwiftUI
 
 struct SettingsView: View {
@@ -9,6 +12,9 @@ struct SettingsView: View {
     @State private var geminiAPIKey = ""
     @State private var geminiKeyFeedback: APIKeyFeedback?
     @State private var isConfirmingGeminiKeyRemoval = false
+    @State private var screenRecordingPermission: SettingsPermissionState = .notGranted
+    @State private var microphonePermission: SettingsPermissionState = .notDetermined
+    @State private var speechRecognitionPermission: SettingsPermissionState = .notDetermined
 
     var body: some View {
         HStack(spacing: 0) {
@@ -27,13 +33,19 @@ struct SettingsView: View {
                 .padding(.horizontal, 24)
                 .padding(.vertical, 28)
             }
-            .scrollIndicators(.hidden)
+            .id(selectedCategoryID)
+            .scrollIndicators(.automatic)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 900, maxWidth: .infinity, minHeight: 650, maxHeight: .infinity)
         .onAppear(perform: applyRequestedSettingsCategory)
         .onChange(of: session.requestedSettingsCategoryID) { _, _ in
             applyRequestedSettingsCategory()
+        }
+        .task(id: selectedCategoryID) {
+            if selectedCategory.wrappedValue == .permissions {
+                refreshPermissionStatuses()
+            }
         }
     }
 
@@ -199,6 +211,11 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .onSubmit(saveOpenAIAPIKey)
                         .accessibilityLabel(AppText.openAIAPIKey)
+                        .accessibilityHint(
+                            session.hasOpenAIAPIKey
+                                ? SettingsCopy.replaceSavedAPIKeyHint
+                                : SettingsCopy.saveNewAPIKeyHint
+                        )
 
                     Button {
                         saveOpenAIAPIKey()
@@ -241,7 +258,11 @@ struct SettingsView: View {
                     )
                 )
 
-                Text(AppText.openAIAPIKeyDescription)
+                Text(
+                    session.hasOpenAIAPIKey
+                        ? SettingsCopy.replaceSavedOpenAIKeyDetail
+                        : AppText.openAIAPIKeyDescription
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -302,7 +323,9 @@ struct SettingsView: View {
 
             SettingsControlRow(
                 title: AppText.microphoneInputDevice,
-                detail: SettingsCopy.microphoneDeviceDetail,
+                detail: session.audioInputSource == .microphone
+                    ? SettingsCopy.microphoneDeviceDetail
+                    : SettingsCopy.microphoneDeviceUnavailableForSystemAudioDetail,
                 systemImage: "mic"
             ) {
                 Picker(AppText.microphoneInputDevice, selection: lockedSessionConfigurationBinding($session.selectedMicrophoneInputDeviceID)) {
@@ -363,15 +386,18 @@ struct SettingsView: View {
 
                 SettingsControlRow(
                     title: SettingsCopy.liveTranslationVolume,
-                    detail: SettingsCopy.liveTranslationVolumeDetail,
+                    detail: session.isDubbingEnabled
+                        ? SettingsCopy.liveTranslationVolumeDetail
+                        : SettingsCopy.voiceOutputDisabledReason,
                     systemImage: "speaker.wave.3"
                 ) {
                     SettingsVolumeSlider(
                         value: lockedSessionConfigurationBinding($session.translatedVoiceVolume),
-                        range: 0...1
+                        range: 0...1,
+                        accessibilityLabel: SettingsCopy.liveTranslationVolume
                     )
                 }
-                .disabled(isSessionConfigurationLocked)
+                .disabled(isSessionConfigurationLocked || !session.isDubbingEnabled)
             }
         }
     }
@@ -444,7 +470,11 @@ struct SettingsView: View {
 
     private var floatingCaptionSettings: some View {
         VStack(alignment: .leading, spacing: 24) {
-            FloatingCaptionPreview()
+            FloatingCaptionPreview(
+                displayMode: session.floatingCaptionDisplayMode,
+                textSize: session.floatingCaptionTextSize,
+                lineCount: session.floatingCaptionLineCount
+            )
 
             SettingsGroup(title: SettingsCopy.displaySettings) {
                 SettingsControlRow(
@@ -506,41 +536,81 @@ struct SettingsView: View {
     }
 
     private var assetSettings: some View {
-        SettingsGroup(title: AppText.requiredAssets) {
-            SettingsAssetAvailabilityRow(
-                title: AppText.speechLanguagePack,
-                availability: session.modelAvailability(for: .appleSpeechOnly)
-            ) {
-                session.downloadModelAssets(for: .appleSpeechOnly)
+        VStack(alignment: .leading, spacing: 12) {
+            SettingsGroup(title: AppText.requiredAssets) {
+                SettingsAssetAvailabilityRow(
+                    title: AppText.speechLanguagePack,
+                    availability: session.modelAvailability(for: .appleSpeechOnly)
+                ) {
+                    session.downloadModelAssets(for: .appleSpeechOnly)
+                }
+
+                SettingsAssetAvailabilityRow(
+                    title: AppText.translationLanguagePack,
+                    availability: session.modelAvailability(for: .appleOnDevice)
+                ) {
+                    session.downloadModelAssets(for: .appleOnDevice)
+                }
             }
 
-            SettingsAssetAvailabilityRow(
-                title: AppText.translationLanguagePack,
-                availability: session.modelAvailability(for: .appleOnDevice)
-            ) {
-                session.downloadModelAssets(for: .appleOnDevice)
-            }
+            Label(SettingsCopy.assetDownloadNotice, systemImage: "internaldrive")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
     private var permissionSettings: some View {
         SettingsGroup(title: AppText.permissions) {
-            SettingsValueRow(
-                title: AppText.permissions,
-                detail: AppText.permissionsHelp,
-                systemImage: "hand.raised",
-                value: SettingsCopy.required
-            )
+            SettingsPermissionRow(
+                title: SettingsCopy.screenRecording,
+                detail: SettingsCopy.screenRecordingPermissionDetail,
+                systemImage: "rectangle.dashed.badge.record",
+                status: screenRecordingPermission
+            ) {
+                session.openPrivacySettings(.screenRecording)
+            }
+
+            SettingsPermissionRow(
+                title: SettingsCopy.systemAudioRecording,
+                detail: SettingsCopy.systemAudioPermissionDetail,
+                systemImage: "speaker.wave.2",
+                status: .unknown
+            ) {
+                session.openPrivacySettings(.systemAudioRecording)
+            }
+
+            SettingsPermissionRow(
+                title: SettingsCopy.microphonePermission,
+                detail: SettingsCopy.microphonePermissionDetail,
+                systemImage: "mic",
+                status: microphonePermission
+            ) {
+                session.openPrivacySettings(.microphone)
+            }
+
+            SettingsPermissionRow(
+                title: SettingsCopy.speechRecognitionPermission,
+                detail: SettingsCopy.speechRecognitionPermissionDetail,
+                systemImage: "quote.bubble",
+                status: speechRecognitionPermission
+            ) {
+                session.openPrivacySettings(.speechRecognition)
+            }
 
             HStack {
-                Spacer()
+                Label(SettingsCopy.permissionReadOnlyNotice, systemImage: "info.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
 
-                Button {
-                    session.openPrivacySettings()
-                } label: {
-                    Label(AppText.openPrivacySettings, systemImage: "arrow.up.right.square")
+                Spacer(minLength: 16)
+
+                Button(action: refreshPermissionStatuses) {
+                    Label(SettingsCopy.refreshPermissionStatus, systemImage: "arrow.clockwise")
                 }
+                .accessibilityHint(SettingsCopy.permissionReadOnlyNotice)
             }
+            .padding(.vertical, 8)
         }
     }
 
@@ -555,10 +625,17 @@ struct SettingsView: View {
                 )
 
                 SettingsValueRow(
+                    title: SettingsCopy.version,
+                    detail: SettingsCopy.versionDetail,
+                    systemImage: "number",
+                    value: appVersionSummary
+                )
+
+                SettingsValueRow(
                     title: SettingsCopy.privacy,
                     detail: SettingsCopy.privacyDetail,
                     systemImage: "lock.shield",
-                    value: SettingsCopy.keychain
+                    value: SettingsCopy.macOSKeychain
                 )
             }
 
@@ -578,6 +655,11 @@ struct SettingsView: View {
                         .textFieldStyle(.roundedBorder)
                         .onSubmit(saveGeminiAPIKey)
                         .accessibilityLabel(AppText.geminiAPIKey)
+                        .accessibilityHint(
+                            session.hasGeminiAPIKey
+                                ? SettingsCopy.replaceSavedAPIKeyHint
+                                : SettingsCopy.saveNewAPIKeyHint
+                        )
 
                     Button {
                         saveGeminiAPIKey()
@@ -620,7 +702,11 @@ struct SettingsView: View {
                     )
                 )
 
-                Text(AppText.geminiAPIKeyDescription)
+                Text(
+                    session.hasGeminiAPIKey
+                        ? SettingsCopy.replaceSavedGeminiKeyDetail
+                        : AppText.geminiAPIKeyDescription
+                )
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -720,8 +806,6 @@ struct SettingsView: View {
         }
     }
 
-    // Key operations run against the Keychain store directly so failures surface as
-    // typed errors; the follow-up session call syncs published state and availability.
     private func saveOpenAIAPIKey() {
         let trimmedKey = openAIAPIKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmedKey.isEmpty else {
@@ -730,26 +814,24 @@ struct SettingsView: View {
         }
 
         do {
-            try OpenAIAPIKeyStore.saveAPIKey(trimmedKey)
+            try session.saveOpenAIAPIKey(trimmedKey)
         } catch {
             openAIKeyFeedback = APIKeyFeedback(kind: .error, message: error.localizedDescription)
             return
         }
 
-        session.saveOpenAIAPIKey(trimmedKey)
         openAIKeyFeedback = APIKeyFeedback(kind: .success, message: AppText.openAIAPIKeySaved)
         openAIAPIKey = ""
     }
 
     private func removeOpenAIAPIKey() {
         do {
-            try OpenAIAPIKeyStore.deleteAPIKey()
+            try session.removeOpenAIAPIKey()
         } catch {
             openAIKeyFeedback = APIKeyFeedback(kind: .error, message: error.localizedDescription)
             return
         }
 
-        session.removeOpenAIAPIKey()
         openAIKeyFeedback = APIKeyFeedback(kind: .warning, message: AppText.openAIAPIKeyRemoved)
         openAIAPIKey = ""
     }
@@ -762,28 +844,72 @@ struct SettingsView: View {
         }
 
         do {
-            try GeminiAPIKeyStore.saveAPIKey(trimmedKey)
+            try session.saveGeminiAPIKey(trimmedKey)
         } catch {
             geminiKeyFeedback = APIKeyFeedback(kind: .error, message: error.localizedDescription)
             return
         }
 
-        session.saveGeminiAPIKey(trimmedKey)
         geminiKeyFeedback = APIKeyFeedback(kind: .success, message: AppText.geminiAPIKeySaved)
         geminiAPIKey = ""
     }
 
     private func removeGeminiAPIKey() {
         do {
-            try GeminiAPIKeyStore.deleteAPIKey()
+            try session.removeGeminiAPIKey()
         } catch {
             geminiKeyFeedback = APIKeyFeedback(kind: .error, message: error.localizedDescription)
             return
         }
 
-        session.removeGeminiAPIKey()
         geminiKeyFeedback = APIKeyFeedback(kind: .warning, message: AppText.geminiAPIKeyRemoved)
         geminiAPIKey = ""
+    }
+
+    private var appVersionSummary: String {
+        let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
+        let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
+
+        return switch (version, build) {
+        case let (version?, build?) where !version.isEmpty && !build.isEmpty:
+            "\(version) (\(build))"
+        case let (version?, _):
+            version
+        case let (_, build?):
+            build
+        default:
+            SettingsCopy.versionUnavailable
+        }
+    }
+
+    private func refreshPermissionStatuses() {
+        screenRecordingPermission = CGPreflightScreenCaptureAccess() ? .allowed : .notGranted
+
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            microphonePermission = .allowed
+        case .denied:
+            microphonePermission = .denied
+        case .restricted:
+            microphonePermission = .restricted
+        case .notDetermined:
+            microphonePermission = .notDetermined
+        @unknown default:
+            microphonePermission = .unknown
+        }
+
+        switch SFSpeechRecognizer.authorizationStatus() {
+        case .authorized:
+            speechRecognitionPermission = .allowed
+        case .denied:
+            speechRecognitionPermission = .denied
+        case .restricted:
+            speechRecognitionPermission = .restricted
+        case .notDetermined:
+            speechRecognitionPermission = .notDetermined
+        @unknown default:
+            speechRecognitionPermission = .unknown
+        }
     }
 
     private func applyRequestedSettingsCategory() {
@@ -862,10 +988,10 @@ private enum SettingsProcessingMode: String, CaseIterable, Identifiable {
             "Apple"
         case .openAI:
             AppText.localized(
-                english: "GPT Translate",
-                korean: "GPT 번역",
-                japanese: "GPT翻訳",
-                chineseSimplified: "GPT 翻译"
+                english: "GPT Realtime",
+                korean: "GPT Realtime",
+                japanese: "GPT Realtime",
+                chineseSimplified: "GPT Realtime"
             )
         case .gptTranscription:
             AppText.localized(
@@ -1057,8 +1183,10 @@ private enum SettingsCopy {
         korean: "GPT Realtime 모델"
     )
     static let gptRealtimeModelDetail = AppText.localized(
-        english: "Choose the translation-endpoint model used by GPT mode.",
-        korean: "GPT 모드에서 사용할 번역 엔드포인트 모델을 선택합니다."
+        english: "Choose the translation-endpoint model used by GPT Realtime.",
+        korean: "GPT Realtime에서 사용할 번역 엔드포인트 모델을 선택합니다.",
+        japanese: "GPT Realtimeで使用する翻訳エンドポイントモデルを選択します。",
+        chineseSimplified: "选择 GPT Realtime 使用的翻译端点模型。"
     )
     static let openAIVoiceAgentModelNotice = AppText.localized(
         english: "gpt-realtime-2.1 and 2.1-mini are voice-agent models for /v1/realtime. AirTranslate live interpretation uses gpt-realtime-translate on the translation endpoint.",
@@ -1090,7 +1218,15 @@ private enum SettingsCopy {
     )
     static let microphoneDeviceDetail = AppText.localized(
         english: "Available only when microphone input is selected.",
-        korean: "마이크 입력을 선택했을 때 사용할 수 있습니다."
+        korean: "마이크 입력을 선택했을 때 사용할 수 있습니다.",
+        japanese: "マイク入力を選択したときに使用できます。",
+        chineseSimplified: "仅在选择麦克风输入时可用。"
+    )
+    static let microphoneDeviceUnavailableForSystemAudioDetail = AppText.localized(
+        english: "Not used for Mac Audio. Switch the audio input to Microphone to choose a device.",
+        korean: "PC 소리에서는 마이크 장치를 사용하지 않습니다. 장치를 선택하려면 오디오 입력을 마이크로 바꾸세요.",
+        japanese: "Mac音声ではマイクデバイスを使用しません。デバイスを選ぶには入力をマイクに切り替えてください。",
+        chineseSimplified: "Mac 音频不使用麦克风设备。要选择设备，请将音频输入切换为麦克风。"
     )
     static let outputModeDetail = AppText.localized(
         english: "Translation shows source and target text. Transcribe Only keeps the source text.",
@@ -1107,6 +1243,12 @@ private enum SettingsCopy {
     static let liveTranslationVolumeDetail = AppText.localized(
         english: "Controls the translated speech AirTranslate plays in live translation modes.",
         korean: "실시간 번역 모드에서 AirTranslate가 재생하는 번역 음성 크기를 조절합니다."
+    )
+    static let voiceOutputDisabledReason = AppText.localized(
+        english: "Turn on Voice Output to adjust translated speech volume.",
+        korean: "번역 음성의 음량을 조절하려면 음성 출력을 켜세요.",
+        japanese: "翻訳音声の音量を調整するには音声出力をオンにしてください。",
+        chineseSimplified: "开启语音输出后才能调整译文语音音量。"
     )
     static let displaySettings = AppText.localized(english: "Display Settings", korean: "표시 설정")
     static let displayContent = AppText.localized(english: "Display Content", korean: "표시 내용")
@@ -1131,15 +1273,170 @@ private enum SettingsCopy {
         english: "Floating caption preview. Original: We're going to focus on real-time translation. Translation: We will focus on real-time translation.",
         korean: "플로팅 자막 미리보기. 원문: We're going to focus on real-time translation. 번역: 우리는 실시간 번역에 집중할 것입니다."
     )
+    static let screenRecording = AppText.localized(
+        english: "Screen Recording",
+        korean: "화면 기록",
+        japanese: "画面収録",
+        chineseSimplified: "屏幕录制"
+    )
+    static let systemAudioRecording = AppText.localized(
+        english: "System Audio Recording",
+        korean: "시스템 오디오 녹음",
+        japanese: "システムオーディオ録音",
+        chineseSimplified: "系统音频录制"
+    )
+    static let microphonePermission = AppText.localized(
+        english: "Microphone",
+        korean: "마이크",
+        japanese: "マイク",
+        chineseSimplified: "麦克风"
+    )
+    static let speechRecognitionPermission = AppText.localized(
+        english: "Speech Recognition",
+        korean: "음성 인식",
+        japanese: "音声認識",
+        chineseSimplified: "语音识别"
+    )
+    static let screenRecordingPermissionDetail = AppText.localized(
+        english: "Required to capture Mac audio. This check never requests permission.",
+        korean: "PC 소리를 캡처하는 데 필요합니다. 이 확인 과정에서는 권한을 요청하지 않습니다.",
+        japanese: "Mac音声のキャプチャに必要です。この確認では権限を要求しません。",
+        chineseSimplified: "捕获 Mac 音频时需要。此检查不会请求权限。"
+    )
+    static let systemAudioPermissionDetail = AppText.localized(
+        english: "macOS can allow screen and audio together or audio only. Confirm the exact choice in System Settings.",
+        korean: "macOS에서는 화면과 오디오를 함께 또는 오디오만 허용할 수 있습니다. 정확한 상태는 시스템 설정에서 확인하세요.",
+        japanese: "macOSでは画面と音声の両方、または音声のみを許可できます。正確な状態はシステム設定で確認してください。",
+        chineseSimplified: "macOS 可允许屏幕和音频，或仅允许音频。请在系统设置中确认确切状态。"
+    )
+    static let microphonePermissionDetail = AppText.localized(
+        english: "Required only when Microphone is selected as the audio input.",
+        korean: "오디오 입력으로 마이크를 선택할 때만 필요합니다.",
+        japanese: "音声入力にマイクを選択した場合のみ必要です。",
+        chineseSimplified: "仅在音频输入选择麦克风时需要。"
+    )
+    static let speechRecognitionPermissionDetail = AppText.localized(
+        english: "Required for Apple speech recognition modes.",
+        korean: "Apple 음성 인식 모드에 필요합니다.",
+        japanese: "Apple音声認識モードに必要です。",
+        chineseSimplified: "Apple 语音识别模式需要此权限。"
+    )
+    static let permissionReadOnlyNotice = AppText.localized(
+        english: "Statuses are read-only. Permission prompts are never shown from this page.",
+        korean: "상태만 확인하며 이 화면에서 권한 요청 창을 띄우지 않습니다.",
+        japanese: "状態の確認のみ行い、この画面から権限要求は表示しません。",
+        chineseSimplified: "这里只读取状态，不会从此页面弹出权限请求。"
+    )
+    static let refreshPermissionStatus = AppText.localized(
+        english: "Refresh Status",
+        korean: "상태 새로고침",
+        japanese: "状態を更新",
+        chineseSimplified: "刷新状态"
+    )
+    static let openSystemSettings = AppText.localized(
+        english: "Open Settings",
+        korean: "설정 열기",
+        japanese: "設定を開く",
+        chineseSimplified: "打开设置"
+    )
+    static let permissionAllowed = AppText.localized(
+        english: "Allowed",
+        korean: "허용됨",
+        japanese: "許可済み",
+        chineseSimplified: "已允许"
+    )
+    static let permissionNotGranted = AppText.localized(
+        english: "Not Allowed",
+        korean: "허용 안 됨",
+        japanese: "未許可",
+        chineseSimplified: "未允许"
+    )
+    static let permissionNotDetermined = AppText.localized(
+        english: "Not Requested",
+        korean: "요청 전",
+        japanese: "未要求",
+        chineseSimplified: "尚未请求"
+    )
+    static let permissionRestricted = AppText.localized(
+        english: "Restricted",
+        korean: "제한됨",
+        japanese: "制限あり",
+        chineseSimplified: "受限"
+    )
+    static let permissionUnknown = AppText.localized(
+        english: "Check in Settings",
+        korean: "설정에서 확인",
+        japanese: "設定で確認",
+        chineseSimplified: "在设置中确认"
+    )
+    static let replaceSavedAPIKeyHint = AppText.localized(
+        english: "A key is already saved. Entering and saving a new key replaces it.",
+        korean: "키가 이미 저장되어 있습니다. 새 키를 입력해 저장하면 기존 키를 교체합니다.",
+        japanese: "キーは保存済みです。新しいキーを入力して保存すると置き換えます。",
+        chineseSimplified: "已有密钥。输入并保存新密钥会替换旧密钥。"
+    )
+    static let saveNewAPIKeyHint = AppText.localized(
+        english: "Enter a provider API key, then save it to macOS Keychain.",
+        korean: "제공자 API 키를 입력한 뒤 macOS 키체인에 저장합니다.",
+        japanese: "プロバイダーのAPIキーを入力し、macOSキーチェーンに保存します。",
+        chineseSimplified: "输入提供商 API 密钥，然后保存到 macOS 钥匙串。"
+    )
+    static let replaceSavedOpenAIKeyDetail = AppText.localized(
+        english: "An OpenAI key is saved in macOS Keychain. Enter and save a new key to replace it.",
+        korean: "OpenAI 키가 macOS 키체인에 저장되어 있습니다. 새 키를 입력하고 저장하면 교체됩니다.",
+        japanese: "OpenAIキーはmacOSキーチェーンに保存済みです。新しいキーを入力して保存すると置き換えます。",
+        chineseSimplified: "OpenAI 密钥已保存在 macOS 钥匙串中。输入并保存新密钥即可替换。"
+    )
+    static let replaceSavedGeminiKeyDetail = AppText.localized(
+        english: "A Gemini key is saved in macOS Keychain. Enter and save a new key to replace it.",
+        korean: "Gemini 키가 macOS 키체인에 저장되어 있습니다. 새 키를 입력하고 저장하면 교체됩니다.",
+        japanese: "GeminiキーはmacOSキーチェーンに保存済みです。新しいキーを入力して保存すると置き換えます。",
+        chineseSimplified: "Gemini 密钥已保存在 macOS 钥匙串中。输入并保存新密钥即可替换。"
+    )
     static let required = AppText.localized(english: "Required", korean: "필수")
     static let aboutAirTranslate = AppText.localized(english: "About AirTranslate", korean: "AirTranslate 정보")
     static let localFirst = AppText.localized(english: "Local first", korean: "로컬 우선")
+    static let version = AppText.localized(
+        english: "Version",
+        korean: "버전",
+        japanese: "バージョン",
+        chineseSimplified: "版本"
+    )
+    static let versionDetail = AppText.localized(
+        english: "App version and build number.",
+        korean: "앱 버전과 빌드 번호입니다.",
+        japanese: "アプリのバージョンとビルド番号です。",
+        chineseSimplified: "应用版本和构建编号。"
+    )
+    static let versionUnavailable = AppText.localized(
+        english: "Unavailable",
+        korean: "확인할 수 없음",
+        japanese: "確認できません",
+        chineseSimplified: "无法获取"
+    )
     static let privacy = AppText.localized(english: "Privacy", korean: "개인정보")
     static let privacyDetail = AppText.localized(
         english: "Apple mode runs locally. OpenAI and Gemini Live are used only after you provide a matching API key and select that mode.",
         korean: "Apple 모드는 로컬에서 실행됩니다. OpenAI와 Gemini Live는 해당 API 키를 저장하고 해당 모드를 선택했을 때만 사용됩니다."
     )
-    static let keychain = "Keychain"
+    static let macOSKeychain = AppText.localized(
+        english: "macOS Keychain",
+        korean: "macOS 키체인",
+        japanese: "macOSキーチェーン",
+        chineseSimplified: "macOS 钥匙串"
+    )
+    static let retry = AppText.localized(
+        english: "Retry",
+        korean: "다시 시도",
+        japanese: "再試行",
+        chineseSimplified: "重试"
+    )
+    static let assetDownloadNotice = AppText.localized(
+        english: "Language assets download to this Mac. Size varies by language and macOS version; progress and errors appear here.",
+        korean: "언어 자산은 이 Mac에 내려받습니다. 크기는 언어와 macOS 버전에 따라 달라지며 진행 및 오류 상태는 이 화면에 표시됩니다.",
+        japanese: "言語アセットはこのMacにダウンロードされます。容量は言語とmacOSのバージョンにより異なり、進行状況とエラーはここに表示されます。",
+        chineseSimplified: "语言资源会下载到这台 Mac。大小因语言和 macOS 版本而异，进度和错误会显示在此处。"
+    )
     static let sidebarHint = AppText.localized(
         english: "Opens this settings category.",
         korean: "이 설정 카테고리를 엽니다."
@@ -1205,11 +1502,29 @@ private struct SettingsPageHeader: View {
 }
 
 private struct FloatingCaptionPreview: View {
+    let displayMode: FloatingCaptionDisplayMode
+    let textSize: FloatingCaptionTextSize
+    let lineCount: FloatingCaptionLineCount
+
+    private let originalText = "We're going to focus on real-time translation."
+    private let translationText = "우리는 실시간 번역에 집중할 것입니다."
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(AppText.localized(english: "Preview", korean: "미리보기"))
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
+            HStack {
+                Text(AppText.localized(english: "Preview", korean: "미리보기"))
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+
+                Spacer()
+
+                Text("\(displayMode.title) · \(textSize.title) · \(lineCount.title)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel(
+                        "\(AppText.floatingDisplay): \(displayMode.title), \(AppText.floatingTextSize): \(textSize.title), \(AppText.floatingLineCount): \(lineCount.title)"
+                    )
+            }
 
             ZStack {
                 RoundedRectangle(cornerRadius: AirTranslateDesign.surfaceRadius, style: .continuous)
@@ -1219,24 +1534,148 @@ private struct FloatingCaptionPreview: View {
                     .fill(.ultraThinMaterial)
                     .opacity(0.45)
 
-                VStack(spacing: 10) {
-                    Text("We're going to focus on real-time translation.")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.white)
+                VStack(spacing: 8) {
+                    if displayMode == .original || displayMode == .originalAndTranslation {
+                        Text(originalText)
+                            .font(displayMode == .original ? previewPrimaryFont : previewSecondaryFont)
+                            .foregroundStyle(.white)
+                            .lineLimit(lineCount.rawValue)
+                            .accessibilityLabel("\(AppText.original): \(originalText)")
+                    }
 
-                    Text("우리는 실시간 번역에 집중할 것입니다.")
-                        .font(.title3.weight(.bold))
-                        .foregroundStyle(Color.accentColor)
+                    if displayMode == .translation || displayMode == .originalAndTranslation {
+                        Text(translationText)
+                            .font(previewPrimaryFont)
+                            .foregroundStyle(Color.accentColor)
+                            .lineLimit(lineCount.rawValue)
+                            .accessibilityLabel("\(AppText.translation): \(translationText)")
+                    }
                 }
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 22)
                 .padding(.vertical, 16)
                 .background(.black.opacity(0.76), in: RoundedRectangle(cornerRadius: AirTranslateDesign.surfaceRadius, style: .continuous))
+                .accessibilityElement(children: .contain)
             }
-            .frame(height: 122)
+            .frame(height: previewHeight)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(SettingsCopy.floatingPreviewAccessibilityLabel)
+        }
+    }
+
+    private var previewPrimaryFont: Font {
+        switch textSize {
+        case .small:
+            .system(size: 14, weight: .semibold)
+        case .medium:
+            .system(size: 17, weight: .semibold)
+        case .large:
+            .system(size: 20, weight: .semibold)
+        case .extraLarge:
+            .system(size: 23, weight: .semibold)
+        }
+    }
+
+    private var previewSecondaryFont: Font {
+        switch textSize {
+        case .small:
+            .system(size: 11, weight: .medium)
+        case .medium:
+            .system(size: 13, weight: .medium)
+        case .large:
+            .system(size: 15, weight: .medium)
+        case .extraLarge:
+            .system(size: 17, weight: .medium)
+        }
+    }
+
+    private var previewHeight: CGFloat {
+        let lineContribution = CGFloat(max(0, lineCount.rawValue - 2)) * 5
+        let sizeContribution: CGFloat
+        switch textSize {
+        case .small:
+            sizeContribution = 0
+        case .medium:
+            sizeContribution = 4
+        case .large:
+            sizeContribution = 10
+        case .extraLarge:
+            sizeContribution = 18
+        }
+
+        return 112 + lineContribution + sizeContribution
+    }
+}
+
+private enum SettingsPermissionState: Equatable {
+    case allowed
+    case notGranted
+    case denied
+    case restricted
+    case notDetermined
+    case unknown
+
+    var title: String {
+        switch self {
+        case .allowed:
+            SettingsCopy.permissionAllowed
+        case .notGranted, .denied:
+            SettingsCopy.permissionNotGranted
+        case .restricted:
+            SettingsCopy.permissionRestricted
+        case .notDetermined:
+            SettingsCopy.permissionNotDetermined
+        case .unknown:
+            SettingsCopy.permissionUnknown
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .allowed:
+            .green
+        case .notDetermined, .unknown:
+            .orange
+        case .notGranted, .denied, .restricted:
+            .red
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .allowed:
+            "checkmark.circle.fill"
+        case .notDetermined, .unknown:
+            "questionmark.circle.fill"
+        case .notGranted, .denied, .restricted:
+            "xmark.circle.fill"
+        }
+    }
+}
+
+private struct SettingsPermissionRow: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    let status: SettingsPermissionState
+    let openSettings: () -> Void
+
+    var body: some View {
+        SettingsControlRow(title: title, detail: detail, systemImage: systemImage) {
+            HStack(spacing: 10) {
+                Label(status.title, systemImage: status.systemImage)
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(status.color)
+                    .accessibilityLabel("\(title): \(status.title)")
+
+                if status != .allowed {
+                    Button(action: openSettings) {
+                        Label(SettingsCopy.openSystemSettings, systemImage: "arrow.up.right.square")
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.small)
+                    .accessibilityLabel("\(title), \(SettingsCopy.openSystemSettings)")
+                }
+            }
         }
     }
 }
@@ -1354,16 +1793,20 @@ private struct SettingsToggleRow: View {
 private struct SettingsVolumeSlider: View {
     @Binding var value: Double
     let range: ClosedRange<Double>
+    let accessibilityLabel: String
 
     var body: some View {
         HStack(spacing: 10) {
             Slider(value: $value, in: range, step: 0.05)
                 .frame(width: 150)
+                .accessibilityLabel(accessibilityLabel)
+                .accessibilityValue("\(Int((value * 100).rounded()))%")
 
             Text("\(Int((value * 100).rounded()))%")
                 .font(.callout.monospacedDigit().weight(.semibold))
                 .foregroundStyle(.secondary)
                 .frame(width: 44, alignment: .trailing)
+                .accessibilityHidden(true)
         }
     }
 }
@@ -1426,23 +1869,38 @@ private struct SettingsAssetAvailabilityRow: View {
             systemImage: symbolName
         ) {
             if availability.state == .checking || availability.state == .downloading {
-                ProgressView()
-                    .controlSize(.small)
-                    .accessibilityLabel(title)
-                    .accessibilityValue(availability.state.title)
-            } else if availability.state.canDownload {
-                Button(AppText.download) {
-                    download()
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityHidden(true)
+
+                    assetStateLabel
                 }
-                .accessibilityLabel("\(title) \(AppText.download)")
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(title) \(availability.state.title)")
+            } else if availability.state.canDownload {
+                HStack(spacing: 10) {
+                    assetStateLabel
+
+                    Button(availability.state == .failed ? SettingsCopy.retry : AppText.download) {
+                        download()
+                    }
+                    .accessibilityLabel(
+                        "\(title) \(availability.state == .failed ? SettingsCopy.retry : AppText.download)"
+                    )
+                }
             } else {
-                Text(availability.state.title)
-                    .font(.callout.weight(.semibold))
-                    .foregroundStyle(color)
+                assetStateLabel
                     .accessibilityLabel("\(title) \(availability.state.title)")
             }
         }
         .help(availability.detail)
+    }
+
+    private var assetStateLabel: some View {
+        Text(availability.state.title)
+            .font(.callout.weight(.semibold))
+            .foregroundStyle(color)
     }
 
     private var symbolName: String {

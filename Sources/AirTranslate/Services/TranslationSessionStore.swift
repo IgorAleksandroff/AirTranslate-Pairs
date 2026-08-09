@@ -4,6 +4,25 @@ import AirTranslateCore
 import Foundation
 import Observation
 
+enum PrivacySettingsPane {
+    case screenRecording
+    case systemAudioRecording
+    case microphone
+    case speechRecognition
+
+    fileprivate var anchor: String {
+        switch self {
+        case .screenRecording, .systemAudioRecording:
+            // macOS groups Screen Recording and System Audio Recording in this pane.
+            "Privacy_ScreenCapture"
+        case .microphone:
+            "Privacy_Microphone"
+        case .speechRecognition:
+            "Privacy_SpeechRecognition"
+        }
+    }
+}
+
 private enum SettingsKey {
     static let sourceLanguageID = "sourceLanguageID"
     static let targetLanguageID = "targetLanguageID"
@@ -1111,8 +1130,11 @@ final class TranslationSessionStore {
     }
 
     func openPrivacySettings() {
-        let privacyPane = audioInputSource == .microphone ? "Privacy_Microphone" : "Privacy_ScreenCapture"
-        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(privacyPane)") else {
+        openPrivacySettings(audioInputSource == .microphone ? .microphone : .screenRecording)
+    }
+
+    func openPrivacySettings(_ pane: PrivacySettingsPane) {
+        guard let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?\(pane.anchor)") else {
             return
         }
 
@@ -1131,48 +1153,32 @@ final class TranslationSessionStore {
         }
     }
 
-    func saveOpenAIAPIKey(_ key: String) {
-        do {
-            try OpenAIAPIKeyStore.saveAPIKey(key)
-            hasOpenAIAPIKey = true
-            statusMessage = AppText.openAIAPIKeySaved
-            refreshModelAvailability()
-        } catch {
-            statusMessage = error.localizedDescription
-        }
+    func saveOpenAIAPIKey(_ key: String) throws {
+        try OpenAIAPIKeyStore.saveAPIKey(key)
+        hasOpenAIAPIKey = true
+        statusMessage = AppText.openAIAPIKeySaved
+        refreshModelAvailability()
     }
 
-    func removeOpenAIAPIKey() {
-        do {
-            try OpenAIAPIKeyStore.deleteAPIKey()
-            hasOpenAIAPIKey = false
-            statusMessage = AppText.openAIAPIKeyRemoved
-            refreshModelAvailability()
-        } catch {
-            statusMessage = error.localizedDescription
-        }
+    func removeOpenAIAPIKey() throws {
+        try OpenAIAPIKeyStore.deleteAPIKey()
+        hasOpenAIAPIKey = false
+        statusMessage = AppText.openAIAPIKeyRemoved
+        refreshModelAvailability()
     }
 
-    func saveGeminiAPIKey(_ key: String) {
-        do {
-            try GeminiAPIKeyStore.saveAPIKey(key)
-            hasGeminiAPIKey = true
-            statusMessage = AppText.geminiAPIKeySaved
-            refreshModelAvailability()
-        } catch {
-            statusMessage = error.localizedDescription
-        }
+    func saveGeminiAPIKey(_ key: String) throws {
+        try GeminiAPIKeyStore.saveAPIKey(key)
+        hasGeminiAPIKey = true
+        statusMessage = AppText.geminiAPIKeySaved
+        refreshModelAvailability()
     }
 
-    func removeGeminiAPIKey() {
-        do {
-            try GeminiAPIKeyStore.deleteAPIKey()
-            hasGeminiAPIKey = false
-            statusMessage = AppText.geminiAPIKeyRemoved
-            refreshModelAvailability()
-        } catch {
-            statusMessage = error.localizedDescription
-        }
+    func removeGeminiAPIKey() throws {
+        try GeminiAPIKeyStore.deleteAPIKey()
+        hasGeminiAPIKey = false
+        statusMessage = AppText.geminiAPIKeyRemoved
+        refreshModelAvailability()
     }
 
     func openTranscriptsFolder() {

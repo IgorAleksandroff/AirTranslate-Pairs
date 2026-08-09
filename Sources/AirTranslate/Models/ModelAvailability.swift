@@ -29,7 +29,7 @@ enum ModelAvailabilityState {
     }
 
     var canDownload: Bool {
-        self == .downloadRequired
+        self == .downloadRequired || self == .failed
     }
 }
 
