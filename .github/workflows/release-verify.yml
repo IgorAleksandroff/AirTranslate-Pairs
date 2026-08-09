@@ -39,9 +39,22 @@ jobs:
 
       - name: Stress metadata-grace regression
         run: |
+          set -o pipefail
           for attempt in {1..20}; do
             echo "Metadata-grace regression attempt $attempt/20"
-            swift test --filter 'GPTLiveTranscriptionModeTests\.(orphanTerminalRecoversAfterElapsedMetadataGrace|terminalWithMissingPredecessorRecoversAfterElapsedMetadataGrace)'
+            attempt_log="/tmp/airtranslate-metadata-grace-$attempt.log"
+            swift test \
+              --filter 'orphanTerminalRecoversAfterElapsedMetadataGrace|terminalWithMissingPredecessorRecoversAfterElapsedMetadataGrace' \
+              2>&1 | tee "$attempt_log"
+            if grep -Fq 'No matching test cases were run' "$attempt_log"; then
+              echo "Metadata-grace regression filter matched no tests." >&2
+              exit 1
+            fi
+            if ! grep -Eq 'Test run with 2 tests in 1 suite passed' "$attempt_log"; then
+              echo "Metadata-grace regression attempt did not execute exactly two tests." >&2
+              exit 1
+            fi
+            rm "$attempt_log"
           done
 
       - name: Run full test suite
