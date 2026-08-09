@@ -7,7 +7,7 @@ struct MenuBarStatusView: View {
     @State private var isFloatingCaptionVisible = FloatingCaptionWindowController.isOpen
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 10) {
             header
 
             actionGrid
@@ -24,8 +24,8 @@ struct MenuBarStatusView: View {
 
             appControls
         }
-        .padding(16)
-        .frame(width: 360)
+        .padding(12)
+        .frame(width: 330)
         .background(.regularMaterial)
         .onAppear {
             syncFloatingCaptionVisibility()
@@ -36,12 +36,11 @@ struct MenuBarStatusView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
+        HStack(alignment: .center, spacing: 9) {
             Image(systemName: statusSymbolName)
-                .font(.title2)
+                .font(.system(size: AirTranslateDesign.iconLarge, weight: .semibold))
                 .foregroundStyle(statusColor)
-                .frame(width: 34, height: 34)
-                .background(statusColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .frame(width: 26, height: 26)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(AppText.floatingCaptions)
@@ -58,39 +57,7 @@ struct MenuBarStatusView: View {
     }
 
     private var actionGrid: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 60), spacing: 6)], spacing: 6) {
-            Button {
-                toggleFloatingCaptions()
-            } label: {
-                IconPanelButtonLabel(
-                    systemImage: isFloatingCaptionVisible ? "captions.bubble.fill" : "captions.bubble",
-                    title: isFloatingCaptionVisible
-                        ? AppText.localized(english: "Hide", korean: "숨김", japanese: "非表示", chineseSimplified: "隐藏")
-                        : AppText.localized(english: "Show", korean: "보기", japanese: "表示", chineseSimplified: "显示"),
-                    subtitle: isFloatingCaptionVisible ? AppText.floatingCaptionPowerOn : AppText.floatingCaptionPowerOff,
-                    accentColor: isFloatingCaptionVisible ? .green : .secondary,
-                    isSelected: isFloatingCaptionVisible
-                )
-            }
-            .buttonStyle(.plain)
-            .help(isFloatingCaptionVisible ? AppText.hideFloatingCaptions : AppText.showFloatingCaptions)
-            .accessibilityLabel(isFloatingCaptionVisible ? AppText.hideFloatingCaptions : AppText.showFloatingCaptions)
-            .accessibilityValue(isFloatingCaptionVisible ? AppText.floatingCaptionPowerOn : AppText.floatingCaptionPowerOff)
-
-            Button {
-                openWindow(id: AirTranslateWindowID.main)
-                NSApp.activate(ignoringOtherApps: true)
-            } label: {
-                IconPanelButtonLabel(
-                    systemImage: "macwindow",
-                    title: AppText.localized(english: "App", korean: "앱", japanese: "アプリ", chineseSimplified: "应用"),
-                    subtitle: AppText.localized(english: "Main", korean: "메인", japanese: "メイン", chineseSimplified: "主窗口"),
-                    accentColor: .secondary
-                )
-            }
-            .buttonStyle(.plain)
-            .help(AppText.openMainWindow)
-
+        VStack(spacing: 2) {
             Button {
                 toggleCapture()
             } label: {
@@ -102,10 +69,42 @@ struct MenuBarStatusView: View {
                     isSelected: capturePhase == .idle
                 )
             }
-            .buttonStyle(.plain)
+            .buttonStyle(AirTranslatePressButtonStyle())
             .help(capturePhase.actionTitle)
             .accessibilityLabel(capturePhase.actionTitle)
             .accessibilityValue(capturePhase.actionSubtitle(statusMessage: session.statusMessage))
+
+            Button {
+                toggleFloatingCaptions()
+            } label: {
+                IconPanelButtonLabel(
+                    systemImage: isFloatingCaptionVisible ? "captions.bubble.fill" : "captions.bubble",
+                    title: isFloatingCaptionVisible
+                        ? AppText.localized(english: "Hide captions", korean: "자막 숨기기", japanese: "字幕を隠す", chineseSimplified: "隐藏字幕")
+                        : AppText.localized(english: "Show captions", korean: "자막 보기", japanese: "字幕を表示", chineseSimplified: "显示字幕"),
+                    subtitle: isFloatingCaptionVisible ? AppText.floatingCaptionPowerOn : AppText.floatingCaptionPowerOff,
+                    accentColor: isFloatingCaptionVisible ? .green : .secondary,
+                    isSelected: isFloatingCaptionVisible
+                )
+            }
+            .buttonStyle(AirTranslatePressButtonStyle())
+            .help(isFloatingCaptionVisible ? AppText.hideFloatingCaptions : AppText.showFloatingCaptions)
+            .accessibilityLabel(isFloatingCaptionVisible ? AppText.hideFloatingCaptions : AppText.showFloatingCaptions)
+            .accessibilityValue(isFloatingCaptionVisible ? AppText.floatingCaptionPowerOn : AppText.floatingCaptionPowerOff)
+
+            Button {
+                openWindow(id: AirTranslateWindowID.main)
+                NSApp.activate(ignoringOtherApps: true)
+            } label: {
+                IconPanelButtonLabel(
+                    systemImage: "macwindow",
+                    title: AppText.localized(english: "Open AirTranslate", korean: "AirTranslate 열기", japanese: "AirTranslateを開く", chineseSimplified: "打开 AirTranslate"),
+                    subtitle: AppText.localized(english: "Main window", korean: "메인 윈도우", japanese: "メインウインドウ", chineseSimplified: "主窗口"),
+                    accentColor: .secondary
+                )
+            }
+            .buttonStyle(AirTranslatePressButtonStyle())
+            .help(AppText.openMainWindow)
 
             if session.isRunning {
                 Button {
@@ -119,7 +118,7 @@ struct MenuBarStatusView: View {
                         isSelected: session.isPaused
                     )
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(AirTranslatePressButtonStyle())
             }
         }
     }
@@ -142,7 +141,7 @@ struct MenuBarStatusView: View {
                             isSelected: session.floatingCaptionDisplayMode == mode
                         )
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(AirTranslatePressButtonStyle())
                     .help(mode.title)
                     .accessibilityLabel(mode.title)
                     .accessibilityValue(session.floatingCaptionDisplayMode == mode ? AppText.localized(english: "Selected", korean: "선택됨", japanese: "選択中", chineseSimplified: "已选择") : "")
@@ -370,16 +369,15 @@ private struct IconPanelButtonLabel: View {
     var isSelected = false
 
     var body: some View {
-        VStack(spacing: 6) {
+        HStack(spacing: 9) {
             Image(systemName: systemImage)
-                .font(.system(size: 18, weight: .bold))
+                .font(.system(size: AirTranslateDesign.iconRegular, weight: .semibold))
                 .foregroundStyle(accentColor)
-                .frame(width: 30, height: 30)
-                .background(accentColor.opacity(isSelected ? 0.2 : 0.1), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .frame(width: 22)
 
-            VStack(spacing: 1) {
+            VStack(alignment: .leading, spacing: 1) {
                 Text(title)
-                    .font(.caption.weight(.semibold))
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                     .minimumScaleFactor(0.82)
@@ -390,16 +388,18 @@ private struct IconPanelButtonLabel: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.78)
             }
+
+            Spacer(minLength: 0)
+
+            Image(systemName: "chevron.right")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.tertiary)
         }
-        .padding(.vertical, 8)
-        .padding(.horizontal, 4)
-        .frame(maxWidth: .infinity, minHeight: 76)
-        .background(.quaternary.opacity(isSelected ? 0.7 : 0.42), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(accentColor.opacity(isSelected ? 0.48 : 0.14), lineWidth: 1)
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, minHeight: 38)
+        .airTranslateInteractiveSurface(isSelected: isSelected, tint: accentColor)
+        .contentShape(RoundedRectangle(cornerRadius: AirTranslateDesign.controlRadius, style: .continuous))
     }
 }
 
@@ -409,24 +409,21 @@ private struct IconChoiceLabel: View {
     let isSelected: Bool
 
     var body: some View {
-        VStack(spacing: 7) {
+        HStack(spacing: 6) {
             Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .bold))
+                .font(.system(size: AirTranslateDesign.iconSmall, weight: .semibold))
 
             Text(title)
                 .font(.caption.weight(.semibold))
                 .lineLimit(1)
                 .minimumScaleFactor(0.72)
         }
-        .foregroundStyle(isSelected ? Color.white : Color.primary)
-        .padding(.vertical, 10)
-        .frame(maxWidth: .infinity, minHeight: 66)
-        .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.16), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(isSelected ? Color.accentColor.opacity(0.7) : Color.primary.opacity(0.08), lineWidth: 1)
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+        .padding(.horizontal, 7)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, minHeight: 34)
+        .airTranslateInteractiveSurface(isSelected: isSelected)
+        .contentShape(RoundedRectangle(cornerRadius: AirTranslateDesign.controlRadius, style: .continuous))
     }
 }
 
@@ -436,12 +433,11 @@ private struct IconMenuLabel: View {
     let value: String
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Image(systemName: systemImage)
-                .font(.system(size: 17, weight: .bold))
+                .font(.system(size: AirTranslateDesign.iconRegular, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
-                .frame(width: 32, height: 32)
-                .background(Color.accentColor.opacity(0.13), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .frame(width: 22)
 
             VStack(alignment: .leading, spacing: 1) {
                 Text(title)
@@ -461,13 +457,10 @@ private struct IconMenuLabel: View {
                 .font(.caption.weight(.bold))
                 .foregroundStyle(.secondary)
         }
-        .padding(10)
-        .frame(maxWidth: .infinity, minHeight: 58)
-        .background(Color.secondary.opacity(0.14), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        }
-        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, minHeight: 40)
+        .airTranslateInteractiveSurface()
+        .contentShape(RoundedRectangle(cornerRadius: AirTranslateDesign.controlRadius, style: .continuous))
     }
 }

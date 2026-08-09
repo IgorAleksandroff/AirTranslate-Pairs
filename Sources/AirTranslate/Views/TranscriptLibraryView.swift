@@ -19,14 +19,14 @@ struct TranscriptLibraryView: View {
     var body: some View {
         VStack(spacing: 0) {
             header
-                .padding(18)
+                .padding(14)
 
             Divider()
 
             content
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(width: 760, height: 500)
+        .frame(width: 820, height: 520)
         .confirmationDialog(
             AppText.deleteSavedTranscriptConfirmation,
             isPresented: $isDeleteSelectedConfirmationPresented
@@ -54,12 +54,11 @@ struct TranscriptLibraryView: View {
     }
 
     private var header: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 9) {
             Image(systemName: "tray.full")
-                .font(.title3)
+                .font(.system(size: AirTranslateDesign.iconRegular, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
-                .frame(width: 32, height: 32)
-                .background(Color.accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+                .frame(width: 22, height: 22)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(AppText.savedTranscripts)
@@ -115,7 +114,7 @@ struct TranscriptLibraryView: View {
         } else {
             HStack(spacing: 0) {
                 transcriptList
-                    .frame(width: 260)
+                    .frame(width: 230)
 
                 Divider()
 
@@ -136,7 +135,7 @@ struct TranscriptLibraryView: View {
                             transcript: transcript,
                             isSelected: session.selectedSavedTranscriptID == transcript.id
                         )
-                        .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                        .contentShape(RoundedRectangle(cornerRadius: AirTranslateDesign.controlRadius, style: .continuous))
                     }
                     .buttonStyle(.plain)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -182,17 +181,10 @@ struct TranscriptLibraryView: View {
                         Image(systemName: isCopyFeedbackVisible ? "checkmark" : "clipboard")
                             .font(.system(size: 13, weight: .semibold))
                             .foregroundStyle(isCopyFeedbackVisible ? Color.accentColor : Color.secondary)
-                            .frame(width: 28, height: 28)
-                            .background {
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .fill(isCopyFeedbackVisible ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.05))
-                            }
-                            .overlay {
-                                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                    .strokeBorder(isCopyFeedbackVisible ? Color.accentColor.opacity(0.28) : Color.primary.opacity(0.08))
-                            }
+                            .frame(width: 26, height: 26)
+                            .airTranslateInteractiveSurface(isSelected: isCopyFeedbackVisible)
                     }
-                    .buttonStyle(.plain)
+                    .buttonStyle(AirTranslatePressButtonStyle())
                     .help(isCopyFeedbackVisible ? AppText.copied : AppText.copy)
                     .accessibilityLabel(AppText.copy)
                     .disabled(!canCopyDraft)
@@ -217,7 +209,7 @@ struct TranscriptLibraryView: View {
                     }
                 }
             }
-            .padding(18)
+            .padding(16)
         } else {
             ContentUnavailableView(AppText.noSavedTranscriptSelected, systemImage: "doc.text")
         }
@@ -273,10 +265,10 @@ struct TranscriptLibraryView: View {
             ) { field, textView in
                 draftEditorTextViews[field] = textView
             }
-            .background(.quaternary.opacity(0.18), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            .background(AirTranslateDesign.quietFill, in: RoundedRectangle(cornerRadius: AirTranslateDesign.controlRadius, style: .continuous))
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.08))
+                RoundedRectangle(cornerRadius: AirTranslateDesign.controlRadius, style: .continuous)
+                    .strokeBorder(AirTranslateDesign.separator.opacity(0.55))
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
@@ -289,17 +281,10 @@ struct TranscriptLibraryView: View {
             Image(systemName: "sparkles")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Color.secondary)
-                .frame(width: 28, height: 28)
-                .background {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(Color.primary.opacity(0.05))
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.08))
-                }
+                .frame(width: 26, height: 26)
+                .airTranslateInteractiveSurface()
         }
-        .buttonStyle(.plain)
+        .buttonStyle(AirTranslatePressButtonStyle())
         .help(AppText.appleIntelligenceWritingTools)
         .accessibilityLabel(AppText.appleIntelligenceWritingTools)
     }
@@ -495,6 +480,6 @@ private struct TranscriptLibraryRow: View {
         }
         .padding(8)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .background(isSelected ? Color.accentColor.opacity(0.12) : Color.clear, in: RoundedRectangle(cornerRadius: AirTranslateDesign.controlRadius, style: .continuous))
     }
 }

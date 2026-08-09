@@ -5,19 +5,10 @@ struct LiveOutputModePicker: View {
     let isDisabled: Bool
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 7) {
-                Image(systemName: selection.systemImage)
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: 14)
-
-                Text(AppText.outputMode)
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-
-                Spacer(minLength: 0)
-            }
+        VStack(alignment: .leading, spacing: 4) {
+            Text(AppText.outputMode)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
 
             Picker(AppText.outputMode, selection: $selection) {
                 ForEach(LiveOutputMode.allCases) { mode in
@@ -30,7 +21,7 @@ struct LiveOutputModePicker: View {
             .disabled(isDisabled)
             .accessibilityLabel(AppText.outputMode)
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
     }
 }

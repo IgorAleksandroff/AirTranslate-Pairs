@@ -13,25 +13,24 @@ struct SettingsView: View {
     var body: some View {
         HStack(spacing: 0) {
             SettingsSidebar(selection: selectedCategory)
-                .frame(width: 260)
+                .frame(width: AirTranslateDesign.sidebarMinimum)
 
             Divider()
                 .opacity(0.45)
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(alignment: .leading, spacing: 22) {
                     SettingsPageHeader(category: selectedCategory.wrappedValue)
 
                     selectedContent
                 }
-                .padding(.horizontal, 30)
-                .padding(.vertical, 44)
+                .padding(.horizontal, 24)
+                .padding(.vertical, 28)
             }
             .scrollIndicators(.hidden)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(minWidth: 900, maxWidth: .infinity, minHeight: 650, maxHeight: .infinity)
-        .background(Color(nsColor: .windowBackgroundColor))
         .onAppear(perform: applyRequestedSettingsCategory)
         .onChange(of: session.requestedSettingsCategoryID) { _, _ in
             applyRequestedSettingsCategory()
@@ -459,7 +458,6 @@ struct SettingsView: View {
                         }
                     }
                     .labelsHidden()
-                    .focusEffectDisabled()
                     .frame(width: 168)
                 }
 
@@ -475,7 +473,6 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .focusEffectDisabled()
                     .frame(width: 232)
                 }
 
@@ -491,7 +488,6 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .focusEffectDisabled()
                     .frame(width: 252)
                 }
 
@@ -1156,20 +1152,21 @@ private struct SettingsSidebar: View {
     var body: some View {
         List(selection: $selection) {
             ForEach(SettingsCategory.allCases) { category in
-                HStack(spacing: 14) {
+                HStack(spacing: 9) {
                     Image(systemName: category.systemImage)
-                        .font(.title3.weight(.medium))
+                        .font(.system(size: AirTranslateDesign.iconRegular, weight: .medium))
                         .foregroundStyle(selection == category ? Color.primary : Color.secondary)
-                        .frame(width: 28, height: 28)
+                        .frame(width: 20, height: 20)
 
                     Text(category.title)
-                        .font(.body.weight(.semibold))
+                        .font(.callout.weight(.semibold))
                         .foregroundStyle(selection == category ? Color.primary : Color.secondary)
                         .lineLimit(1)
 
                     Spacer(minLength: 0)
                 }
-                .padding(.vertical, 8)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 5)
                 .tag(category)
                 .listRowSeparator(.hidden)
                 .accessibilityLabel(category.title)
@@ -1177,8 +1174,8 @@ private struct SettingsSidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .scrollContentBackground(.hidden)
-        .background(Color.primary.opacity(0.035))
+        .padding(.horizontal, 8)
+        .contentMargins(.top, 6, for: .scrollContent)
     }
 }
 
@@ -1186,19 +1183,15 @@ private struct SettingsPageHeader: View {
     let category: SettingsCategory
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
+        HStack(alignment: .top, spacing: 10) {
             Image(systemName: category.systemImage)
-                .font(.title2.weight(.semibold))
-                .foregroundStyle(.white)
-                .frame(width: 46, height: 46)
-                .background(
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(Color.accentColor)
-                )
+                .font(.system(size: AirTranslateDesign.iconLarge, weight: .semibold))
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 24, height: 24)
 
             VStack(alignment: .leading, spacing: 5) {
                 Text(category.title)
-                    .font(.title2.weight(.bold))
+                    .font(.title2.weight(.semibold))
 
                 Text(category.detail)
                     .font(.callout)
@@ -1213,23 +1206,14 @@ private struct SettingsPageHeader: View {
 
 private struct FloatingCaptionPreview: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             Text(AppText.localized(english: "Preview", korean: "미리보기"))
-                .font(.headline)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.secondary)
 
             ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(
-                        LinearGradient(
-                            colors: [
-                                Color(nsColor: .controlBackgroundColor),
-                                Color.accentColor.opacity(0.18),
-                                Color.black.opacity(0.48)
-                            ],
-                            startPoint: .topLeading,
-                            endPoint: .bottomTrailing
-                        )
-                    )
+                RoundedRectangle(cornerRadius: AirTranslateDesign.surfaceRadius, style: .continuous)
+                    .fill(Color(nsColor: .controlBackgroundColor))
 
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(.ultraThinMaterial)
@@ -1245,10 +1229,9 @@ private struct FloatingCaptionPreview: View {
                         .foregroundStyle(Color.accentColor)
                 }
                 .multilineTextAlignment(.center)
-                .padding(.horizontal, 28)
-                .padding(.vertical, 22)
-                .background(.black.opacity(0.72), in: RoundedRectangle(cornerRadius: 8, style: .continuous))
-                .shadow(color: .black.opacity(0.55), radius: 14, x: 0, y: 8)
+                .padding(.horizontal, 22)
+                .padding(.vertical, 16)
+                .background(.black.opacity(0.76), in: RoundedRectangle(cornerRadius: AirTranslateDesign.surfaceRadius, style: .continuous))
             }
             .frame(height: 122)
             .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
@@ -1326,16 +1309,9 @@ private struct SettingsGroup<Content: View>: View {
             VStack(spacing: 0) {
                 content
             }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 6)
-            .background(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.primary.opacity(0.045))
-            )
-            .overlay(
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.primary.opacity(0.08), lineWidth: 1)
-            )
+            .padding(.horizontal, 12)
+            .padding(.vertical, 4)
+            .airTranslateSurface()
         }
     }
 }
@@ -1347,7 +1323,7 @@ private struct SettingsControlRow<Trailing: View>: View {
     @ViewBuilder let trailing: Trailing
 
     var body: some View {
-        HStack(alignment: .center, spacing: 14) {
+        HStack(alignment: .center, spacing: 10) {
             SettingsRowLabel(title: title, detail: detail, systemImage: systemImage)
 
             Spacer(minLength: 16)
@@ -1415,15 +1391,15 @@ private struct SettingsRowLabel: View {
     let systemImage: String
 
     var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: 9) {
             Image(systemName: systemImage)
-                .font(.title3.weight(.medium))
+                .font(.system(size: AirTranslateDesign.iconRegular, weight: .medium))
                 .foregroundStyle(.secondary)
-                .frame(width: 28, height: 28)
+                .frame(width: 20, height: 20)
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(title)
-                    .font(.body.weight(.semibold))
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(.primary)
 
                 Text(detail)
@@ -1433,7 +1409,7 @@ private struct SettingsRowLabel: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
-        .frame(width: 208, alignment: .leading)
+        .frame(width: 230, alignment: .leading)
         .layoutPriority(1)
     }
 }

@@ -6,7 +6,7 @@ struct CaptionBoardView: View {
     @State private var isFloatingCaptionVisible = FloatingCaptionWindowController.isOpen
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
+        VStack(alignment: .leading, spacing: AirTranslateDesign.sectionSpacing) {
             CaptionBoardHeader(
                 session: session,
                 isFloatingCaptionVisible: isFloatingCaptionVisible
@@ -14,7 +14,7 @@ struct CaptionBoardView: View {
 
             CaptionTranscriptFeed(session: session)
         }
-        .padding(24)
+        .padding(AirTranslateDesign.workspacePadding)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .onAppear {
             syncFloatingCaptionVisibility()
@@ -73,12 +73,8 @@ private struct CaptionTranscriptFeed: View {
                 )
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .padding(24)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 18, style: .continuous)
-                    .strokeBorder(Color.primary.opacity(0.08))
-            }
+            .padding(AirTranslateDesign.workspacePadding)
+            .airTranslateSurface()
         } else {
             transcriptScrollView
         }
@@ -230,17 +226,9 @@ private struct TranscriptPane: View {
                     }
                 } label: {
                     Image(systemName: isCopyFeedbackVisible ? "checkmark" : "doc.on.doc")
-                        .font(.caption.weight(.semibold))
+                        .font(.caption.weight(.medium))
                         .foregroundStyle(isCopyFeedbackVisible ? Color.accentColor : Color.secondary)
-                        .frame(width: 26, height: 26)
-                        .background {
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .fill(isCopyFeedbackVisible ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.05))
-                        }
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                .strokeBorder(isCopyFeedbackVisible ? Color.accentColor.opacity(0.28) : Color.primary.opacity(0.08))
-                        }
+                        .frame(width: 24, height: 24)
                 }
                 .buttonStyle(TranscriptPaneCopyButtonStyle())
                 .controlSize(.small)
@@ -270,14 +258,10 @@ private struct TranscriptPane: View {
                 }
             }
         }
-        .padding(18)
+        .padding(14)
         .frame(height: 360, alignment: .topLeading)
         .frame(maxWidth: .infinity, alignment: .topLeading)
-        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 18, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.08))
-        }
+        .airTranslateSurface(isEmphasized: !isPrimary)
         .task(id: copyFeedbackToken) {
             guard isCopyFeedbackVisible else { return }
 
@@ -544,10 +528,9 @@ private struct SessionOverviewCard: View {
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             Image(systemName: "captions.bubble.fill")
-                .font(.system(size: 15, weight: .bold))
+                .font(.system(size: AirTranslateDesign.iconRegular, weight: .semibold))
                 .foregroundStyle(Color.accentColor)
-                .frame(width: 32, height: 32)
-                .background(Color.accentColor.opacity(0.14), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .frame(width: 24, height: 24)
                 .overlay(alignment: .topTrailing) {
                     if isFloatingCaptionVisible {
                         Circle()
@@ -565,6 +548,21 @@ private struct SessionOverviewCard: View {
                     value: isFloatingCaptionVisible
                 )
 
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title)
+                    .font(.headline.weight(.semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+
+                Text(subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            .layoutPriority(1)
+
+            Spacer(minLength: 12)
+
             Group {
                 if isRunning {
                     HeaderAudioLevelStrip(
@@ -579,16 +577,12 @@ private struct SessionOverviewCard: View {
                     )
                 }
             }
-            .frame(maxWidth: .infinity)
+            .frame(maxWidth: 300, alignment: .trailing)
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 8)
-        .frame(minHeight: 56)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06))
-        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .frame(minHeight: 50)
+        .airTranslateSurface()
     }
 
     private var headerIconHelp: String {
@@ -657,14 +651,9 @@ private struct HeaderStatusMessage: View {
                 .multilineTextAlignment(.leading)
                 .minimumScaleFactor(0.78)
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 10)
-        .padding(.vertical, 7)
-        .background(foregroundStyle.opacity(isBlocked ? 0.12 : 0.08), in: Capsule())
-        .overlay {
-            Capsule()
-                .strokeBorder(foregroundStyle.opacity(isBlocked ? 0.28 : 0.14), lineWidth: 1)
-        }
+        .padding(.vertical, 6)
+        .background(foregroundStyle.opacity(isBlocked ? 0.11 : 0.06), in: RoundedRectangle(cornerRadius: AirTranslateDesign.controlRadius, style: .continuous))
         .help(statusMessage)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(statusMessage)
@@ -686,10 +675,10 @@ private struct HeaderAudioLevelStrip: View {
 
     var body: some View {
         ZStack {
-            Capsule(style: .continuous)
+            RoundedRectangle(cornerRadius: AirTranslateDesign.controlRadius, style: .continuous)
                 .fill(foregroundStyle.opacity(isPaused ? 0.14 : 0.11))
 
-            Capsule(style: .continuous)
+            RoundedRectangle(cornerRadius: AirTranslateDesign.controlRadius, style: .continuous)
                 .strokeBorder(foregroundStyle.opacity(isPaused ? 0.34 : 0.42), lineWidth: 1)
 
             HStack(spacing: 8) {
@@ -718,8 +707,7 @@ private struct HeaderAudioLevelStrip: View {
             }
             .padding(.horizontal, 10)
         }
-        .frame(width: 164, height: 34)
-        .shadow(color: foregroundStyle.opacity(isPaused ? 0 : 0.18), radius: 12)
+        .frame(width: 154, height: 32)
         .help(title)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(title)

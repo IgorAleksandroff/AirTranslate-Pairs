@@ -10,7 +10,11 @@ struct ContentView: View {
         ZStack(alignment: .top) {
             NavigationSplitView {
                 SidebarView(session: session)
-                    .navigationSplitViewColumnWidth(min: 300, ideal: 330, max: 360)
+                    .navigationSplitViewColumnWidth(
+                        min: AirTranslateDesign.sidebarMinimum,
+                        ideal: AirTranslateDesign.sidebarIdeal,
+                        max: AirTranslateDesign.sidebarMaximum
+                    )
             } detail: {
                 CaptionBoardView(session: session)
             }
@@ -55,7 +59,7 @@ struct ContentView: View {
                 Button {
                     toggleFloatingCaptions()
                 } label: {
-                    Label(AppText.floatingCaptions, systemImage: isFloatingCaptionVisible ? "captions.bubble.fill" : "captions.bubble")
+                    Image(systemName: isFloatingCaptionVisible ? "captions.bubble.fill" : "captions.bubble")
                 }
                 .buttonBorderShape(.roundedRectangle)
                 .help(AppText.floatingCaptions)
@@ -66,20 +70,21 @@ struct ContentView: View {
                 Button {
                     isLibraryPresented = true
                 } label: {
-                    Label(AppText.library, systemImage: "tray.full")
+                    Image(systemName: "tray.full")
                 }
                 .buttonBorderShape(.roundedRectangle)
                 .help(AppText.manageSavedTranscripts)
                 .accessibilityLabel(AppText.library)
 
                 SettingsLink {
-                    Label(AppText.translationSettings, systemImage: "gearshape")
+                    Image(systemName: "gearshape")
                 }
                 .buttonBorderShape(.roundedRectangle)
                 .help(AppText.configureTranslationSettings)
                 .accessibilityLabel(AppText.translationSettings)
             }
         }
+        .controlSize(.regular)
         .sheet(isPresented: $isLibraryPresented) {
             TranscriptLibraryView(session: session)
         }
@@ -176,14 +181,14 @@ private struct ToastMessageView: View {
         Label(message, systemImage: "checkmark.circle.fill")
             .font(.callout.weight(.semibold))
             .foregroundStyle(.primary)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(.regularMaterial, in: Capsule())
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: AirTranslateDesign.surfaceRadius, style: .continuous))
             .overlay {
-                Capsule()
-                    .strokeBorder(Color.primary.opacity(0.08))
+                RoundedRectangle(cornerRadius: AirTranslateDesign.surfaceRadius, style: .continuous)
+                    .strokeBorder(AirTranslateDesign.separator.opacity(0.55))
             }
-            .shadow(color: Color.black.opacity(0.16), radius: 14, y: 8)
+            .shadow(color: Color.black.opacity(0.14), radius: 10, y: 6)
             .accessibilityAddTraits(.updatesFrequently)
     }
 }

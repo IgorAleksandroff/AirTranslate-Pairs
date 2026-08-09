@@ -10,12 +10,16 @@ struct FloatingCaptionWindowView: View {
             VStack(spacing: 8) {
                 content
             }
-            .padding(.horizontal, 28)
-            .padding(.vertical, 18)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 14)
             .background {
                 if hasVisibleCaptionText {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(.black.opacity(0.72))
+                    RoundedRectangle(cornerRadius: AirTranslateDesign.surfaceRadius, style: .continuous)
+                        .fill(.black.opacity(0.76))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: AirTranslateDesign.surfaceRadius, style: .continuous)
+                                .strokeBorder(.white.opacity(0.12))
+                        }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -113,7 +117,7 @@ struct FloatingCaptionWindowView: View {
             textHeight = primaryHeight + secondaryHeight + 8
         }
 
-        return min(max(90, textHeight + 36), 720)
+        return min(max(90, textHeight + 28), 720)
     }
 
     private func subtitleText(_ text: String, font: Font) -> some View {

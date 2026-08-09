@@ -8,7 +8,7 @@ struct SidebarView: View {
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: AirTranslateDesign.sectionSpacing) {
                 brandHeader
                 quickSettingsCard
                 detailsCard
@@ -17,7 +17,8 @@ struct SidebarView: View {
                 }
                 storageRow
             }
-            .padding(20)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 12)
         }
         .navigationTitle("AirTranslate")
         .sheet(isPresented: $isLibraryPresented) {
@@ -26,12 +27,12 @@ struct SidebarView: View {
     }
 
     private var brandHeader: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 10) {
             AppIconMark()
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 4) {
                 Text(AppText.appName)
-                    .font(.title2.weight(.semibold))
+                    .font(.headline.weight(.semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(1)
 
@@ -42,12 +43,11 @@ struct SidebarView: View {
 
             SidebarPermissionActionButton(session: session)
         }
-        .padding(16)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06))
+        .overlay(alignment: .bottom) {
+            Divider()
         }
     }
 
@@ -89,7 +89,7 @@ struct SidebarView: View {
                     }
                     .pickerStyle(.segmented)
                     .labelsHidden()
-                    .controlSize(.large)
+                    .controlSize(.regular)
                     .disabled(isSessionConfigurationLocked)
                     .accessibilityLabel(AppText.audioInputSource)
                 }
@@ -127,7 +127,7 @@ struct SidebarView: View {
                         }
                         .pickerStyle(.segmented)
                         .labelsHidden()
-                        .controlSize(.large)
+                        .controlSize(.regular)
                         .disabled(isSessionConfigurationLocked)
                         .accessibilityLabel(AppText.outputMode)
                     }
@@ -138,7 +138,7 @@ struct SidebarView: View {
                         isOn: dubbingEnabledBinding,
                         isDisabled: isSessionConfigurationLocked
                     )
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 8)
                     .padding(.top, -4)
                     .padding(.bottom, session.isDubbingEnabled ? 8 : 13)
                 }
@@ -148,7 +148,7 @@ struct SidebarView: View {
                         volume: translatedVoiceVolumeBinding,
                         isDisabled: isSessionConfigurationLocked
                     )
-                    .padding(.horizontal, 16)
+                    .padding(.horizontal, 8)
                     .padding(.top, -4)
                     .padding(.bottom, 13)
                 }
@@ -173,90 +173,26 @@ struct SidebarView: View {
         )
         let value = "\(ProcessingEngine.current(for: session).title) · \(session.sessionDurationMode.title)"
 
-        return Button(title) {
+        return SidebarActionRow(
+            title: title,
+            detail: value,
+            systemImage: "gearshape"
+        ) {
             openSettings()
-        }
-        .buttonStyle(.plain)
-        .font(.title3.weight(.semibold))
-        .foregroundStyle(.primary)
-        .padding(.leading, 16)
-        .padding(.trailing, 52)
-        .padding(.top, 16)
-        .padding(.bottom, 46)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06))
-        }
-        .overlay(alignment: .bottomLeading) {
-            Text(value)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.leading, 16)
-                .padding(.bottom, 18)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .trailing) {
-            Image(systemName: "gearshape")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 30, height: 30)
-                .padding(.horizontal, 16)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
         }
         .help(AppText.configureTranslationSettings)
         .accessibilityValue("\(AppText.configureTranslationSettings), \(value)")
     }
 
     private var apiKeyCard: some View {
-        Button(missingAPIKeyTitle) {
+        SidebarActionRow(
+            title: missingAPIKeyTitle,
+            detail: SettingsSidebarCopy.apiKeyAction,
+            systemImage: "key.fill",
+            tint: .orange
+        ) {
             session.requestAPIKeySettings()
             openSettings()
-        }
-        .buttonStyle(.plain)
-        .font(.headline.weight(.semibold))
-        .foregroundStyle(.primary)
-        .padding(.leading, 74)
-        .padding(.trailing, 44)
-        .padding(.top, 15)
-        .padding(.bottom, 43)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(Color.orange.opacity(0.28))
-        }
-        .overlay(alignment: .leading) {
-            Image(systemName: "key.fill")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(Color.orange)
-                .frame(width: 42, height: 42)
-                .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .padding(.leading, 16)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .bottomLeading) {
-            Text(SettingsSidebarCopy.apiKeyAction)
-                .font(.callout)
-                .foregroundStyle(Color.orange)
-                .lineLimit(1)
-                .padding(.leading, 74)
-                .padding(.bottom, 17)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .trailing) {
-            Image(systemName: "chevron.right")
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.trailing, 16)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
         }
         .help(missingAPIKeyTitle)
         .accessibilityValue(SettingsSidebarCopy.apiKeyAction)
@@ -264,49 +200,12 @@ struct SidebarView: View {
     }
 
     private var storageRow: some View {
-        Button(AppText.library) {
+        SidebarActionRow(
+            title: AppText.library,
+            detail: AppText.manageSavedTranscripts,
+            systemImage: "tray.full"
+        ) {
             isLibraryPresented = true
-        }
-        .buttonStyle(.plain)
-        .font(.headline.weight(.semibold))
-        .foregroundStyle(.primary)
-        .padding(.leading, 74)
-        .padding(.trailing, 44)
-        .padding(.top, 15)
-        .padding(.bottom, 43)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 13, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06))
-        }
-        .overlay(alignment: .leading) {
-            Image(systemName: "tray.full")
-                .font(.title3.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .frame(width: 42, height: 42)
-                .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-                .padding(.leading, 16)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .bottomLeading) {
-            Text(AppText.manageSavedTranscripts)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.leading, 74)
-                .padding(.bottom, 17)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
-        }
-        .overlay(alignment: .trailing) {
-            Image(systemName: "chevron.right")
-                .font(.callout.weight(.semibold))
-                .foregroundStyle(.secondary)
-                .padding(.trailing, 16)
-                .accessibilityHidden(true)
-                .allowsHitTesting(false)
         }
         .help(AppText.manageSavedTranscripts)
         .accessibilityValue(AppText.manageSavedTranscripts)
@@ -617,7 +516,7 @@ private struct QuickSettingRow<Content: View>: View {
     @ViewBuilder let content: Content
 
     var body: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: 8) {
             Label {
                 Text(title)
                     .font(.callout.weight(.semibold))
@@ -627,26 +526,26 @@ private struct QuickSettingRow<Content: View>: View {
                 Image(systemName: systemImage)
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.secondary)
-                    .frame(width: 20, height: 20)
+                    .frame(width: AirTranslateDesign.iconRegular, height: AirTranslateDesign.iconRegular)
             }
             .labelStyle(.titleAndIcon)
-            .frame(width: 86, alignment: .leading)
+            .frame(width: 72, alignment: .leading)
 
             content
                 .frame(maxWidth: .infinity, alignment: .trailing)
         }
-            .padding(.horizontal, 16)
-        .padding(.vertical, 15)
-        .frame(maxWidth: .infinity, minHeight: 68, alignment: .leading)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 9)
+        .frame(maxWidth: .infinity, minHeight: 50, alignment: .leading)
     }
 }
 
 private struct SidebarDivider: View {
     var body: some View {
         Rectangle()
-            .fill(Color.primary.opacity(0.07))
+            .fill(AirTranslateDesign.separator.opacity(0.55))
             .frame(height: 1)
-            .padding(.horizontal, 16)
+            .padding(.horizontal, 8)
     }
 }
 
@@ -903,9 +802,9 @@ private struct AppIconMark: View {
         Image(nsImage: appIcon)
             .resizable()
             .aspectRatio(contentMode: .fit)
-            .frame(width: 58, height: 58)
-            .clipShape(RoundedRectangle(cornerRadius: 13, style: .continuous))
-            .shadow(color: Color.black.opacity(0.16), radius: 5, x: 0, y: 2)
+            .frame(width: 38, height: 38)
+            .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+            .shadow(color: Color.black.opacity(0.12), radius: 3, x: 0, y: 1)
             .accessibilityHidden(true)
     }
 }
@@ -932,12 +831,12 @@ private struct SidebarCard<Content: View, HeaderAccessory: View>: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
+        VStack(alignment: .leading, spacing: 8) {
             if let title {
                 HStack(spacing: 8) {
                     Text(title)
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(.primary)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
 
                     Spacer(minLength: 0)
 
@@ -947,13 +846,61 @@ private struct SidebarCard<Content: View, HeaderAccessory: View>: View {
 
             content
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 16)
+        .padding(.horizontal, 6)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(Color.primary.opacity(0.06))
+        .overlay(alignment: .top) {
+            Divider()
+        }
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
+}
+
+private struct SidebarActionRow: View {
+    let title: String
+    let detail: String
+    let systemImage: String
+    var tint: Color = .secondary
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 9) {
+                Image(systemName: systemImage)
+                    .font(.system(size: AirTranslateDesign.iconRegular, weight: .semibold))
+                    .foregroundStyle(tint)
+                    .frame(width: 22)
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.primary)
+                        .lineLimit(1)
+
+                    Text(detail)
+                        .font(.caption)
+                        .foregroundStyle(tint)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.tertiary)
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(AirTranslatePressButtonStyle())
+        .airTranslateInteractiveSurface()
+        .overlay(alignment: .bottom) {
+            Divider()
+                .padding(.leading, 39)
         }
     }
 }
