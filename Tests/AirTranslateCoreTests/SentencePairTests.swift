@@ -17,6 +17,28 @@ struct SentencePairTests {
     }
 
     @Test
+    func longSentencesSplitAtClausesButShortFragmentsStayGlued() {
+        #expect(TranscriptTextProcessor.clauses(from: "Yes, I agree with that.") == ["Yes, I agree with that."])
+        #expect(TranscriptTextProcessor.clauses(
+            from: "When we looked at the numbers last quarter, the churn was higher than expected, so we changed the plan."
+        ) == [
+            "When we looked at the numbers last quarter,",
+            "the churn was higher than expected,",
+            "so we changed the plan."
+        ])
+        #expect(TranscriptTextProcessor.clauses(
+            from: "Well, honestly the roadmap for next year depends on the budget we get in January."
+        ) == [
+            "Well, honestly the roadmap for next year depends on the budget we get in January."
+        ])
+        #expect(TranscriptTextProcessor.clauses(
+            from: "We shipped about 1,000 units in the first month and the customers were happy with it."
+        ) == [
+            "We shipped about 1,000 units in the first month and the customers were happy with it."
+        ])
+    }
+
+    @Test
     func sentencePairsLookUpTranslationsAndMarkParagraphStarts() {
         let line = CaptionLine(
             sourceText: "Hello there.\nHow are you?\n\nI am fine",

@@ -63,10 +63,54 @@ package enum TranscriptTextProcessor {
                     .flatMap { line in
                         organizeParagraph(String(line), languageID: languageID)
                             .split(separator: "\n", omittingEmptySubsequences: true)
-                            .map(String.init)
+                            .flatMap { clauses(from: String($0)) }
                     }
             }
             .filter { !$0.isEmpty }
+    }
+
+    package static let longSentenceWordCount = 8
+    package static let minimumClauseWordCount = 3
+
+    /// Long sentences are additionally split at clause punctuation so live pairs stay short.
+    /// Short fragments are glued to their neighbour; "1,000" style commas are left alone.
+    package static func clauses(from sentence: String) -> [String] {
+        guard wordCount(sentence) > longSentenceWordCount else { return [sentence] }
+
+        var parts: [String] = []
+        var current = ""
+        var previous: Character?
+        for character in sentence {
+            if character.isWhitespace,
+               let previous,
+               ",;:，；：".contains(previous),
+               !current.trimmingCharacters(in: .whitespaces).isEmpty {
+                parts.append(current.trimmingCharacters(in: .whitespaces))
+                current = ""
+            } else {
+                current.append(character)
+            }
+            previous = character
+        }
+        let tail = current.trimmingCharacters(in: .whitespaces)
+        if !tail.isEmpty {
+            parts.append(tail)
+        }
+
+        var merged: [String] = []
+        for part in parts {
+            if let last = merged.last,
+               wordCount(last) < minimumClauseWordCount || wordCount(part) < minimumClauseWordCount {
+                merged[merged.count - 1] = last + " " + part
+            } else {
+                merged.append(part)
+            }
+        }
+        return merged
+    }
+
+    private static func wordCount(_ text: String) -> Int {
+        text.split(whereSeparator: \.isWhitespace).count
     }
 
     package static func paragraphParts(from text: String) -> [String] {

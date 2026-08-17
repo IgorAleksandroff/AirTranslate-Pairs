@@ -5,7 +5,6 @@ struct SentencePanelView: View {
 
     private struct Entry: Identifiable {
         let pair: SentencePair
-        let isPending: Bool
         var id: String { pair.id }
     }
 
@@ -75,10 +74,12 @@ struct SentencePanelView: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(entry.pair.source)
                 .font(.system(size: fontSize, weight: .medium))
-                .foregroundStyle(.white.opacity(entry.isPending ? 0.62 : 0.96))
+                .foregroundStyle(.white.opacity(0.96))
+            // Reserve two lines so rows do not jump while the translation streams in.
             Text(entry.pair.translated ?? "…")
                 .font(.system(size: fontSize, weight: .regular))
                 .foregroundStyle(.white.opacity(entry.pair.translated == nil ? 0.35 : 0.6))
+                .lineLimit(2...)
         }
         .textSelection(.enabled)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -100,13 +101,8 @@ struct SentencePanelView: View {
     // Newest sentence first; the in-progress tail is the first entry.
     private var entries: [Entry] {
         let languageID = session.sourceLanguage.id
-        var result: [Entry] = []
-        for line in session.lines.reversed() {
-            let pairs = line.sentencePairs(sourceLanguageID: languageID)
-            for (offset, pair) in pairs.reversed().enumerated() {
-                result.append(Entry(pair: pair, isPending: offset == 0 && !line.isFinal && result.isEmpty))
-            }
+        return session.lines.reversed().flatMap { line in
+            line.sentencePairs(sourceLanguageID: languageID).reversed().map(Entry.init)
         }
-        return result
     }
 }
