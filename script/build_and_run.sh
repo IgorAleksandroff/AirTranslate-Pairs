@@ -16,7 +16,8 @@ APP_BINARY="$APP_MACOS/$EXECUTABLE_NAME"
 INFO_PLIST="$APP_CONTENTS/Info.plist"
 ENTITLEMENTS_PATH="$ROOT_DIR/Resources/AirTranslate.entitlements"
 DEBUG_ENTITLEMENTS_PATH="$ROOT_DIR/Resources/AirTranslate.debug.entitlements"
-CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-}"
+# Stable identity keeps macOS privacy grants (system audio, speech) across rebuilds.
+CODE_SIGN_IDENTITY="${CODE_SIGN_IDENTITY:-AirTranslate Dev}"
 
 case "$MODE" in
   --debug|debug)
@@ -40,23 +41,18 @@ cp "$ROOT_DIR/Resources/AppIcon.icns" "$APP_RESOURCES/AppIcon.icns"
 
 "$SCRIPT_DIR/write_info_plist.sh" "$INFO_PLIST" local
 
-select_code_sign_identity() {
-  if [[ -n "$CODE_SIGN_IDENTITY" ]]; then
-    printf '%s\n' "$CODE_SIGN_IDENTITY"
-    return
-  fi
-
-  /usr/bin/security find-identity -v -p codesigning 2>/dev/null |
-    /usr/bin/awk -F'"' '/"Apple Development:|Developer ID Application:|Mac Developer:/{ print $2; exit }'
-}
-
-SIGN_IDENTITY="$(select_code_sign_identity)"
-if [[ -n "$SIGN_IDENTITY" ]]; then
-  /usr/bin/codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS_PATH" --timestamp=none --sign "$SIGN_IDENTITY" "$APP_BUNDLE"
-else
-  /usr/bin/codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS_PATH" --sign - "$APP_BUNDLE"
-  echo "warning: no persistent code signing identity found; macOS privacy grants may reset after rebuilds" >&2
+# Self-signed identities are listed as untrusted, so search without -v and match the label by prefix.
+SIGN_IDENTITY_HASH="$(/usr/bin/security find-identity -p codesigning 2>/dev/null |
+  /usr/bin/awk -v name="$CODE_SIGN_IDENTITY" 'index($0, "\"" name) { print $2; exit }')"
+if [[ -z "$SIGN_IDENTITY_HASH" ]]; then
+  echo "error: code signing identity \"$CODE_SIGN_IDENTITY\" not found in keychain." >&2
+  echo "Create it once: Keychain Access → Certificate Assistant → Create a Certificate…" >&2
+  echo "  Name: $CODE_SIGN_IDENTITY, Identity Type: Self Signed Root, Certificate Type: Code Signing" >&2
+  echo "Or pass CODE_SIGN_IDENTITY=<name> to use another identity." >&2
+  exit 1
 fi
+
+/usr/bin/codesign --force --deep --options runtime --entitlements "$ENTITLEMENTS_PATH" --timestamp=none --sign "$SIGN_IDENTITY_HASH" "$APP_BUNDLE"
 
 open_app() {
   /usr/bin/open -n "$APP_BUNDLE"
