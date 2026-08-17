@@ -24,7 +24,7 @@ fi
   <key>CFBundleDisplayName</key>
   <string>$APP_NAME</string>
   <key>CFBundleExecutable</key>
-  <string>$APP_NAME</string>
+  <string>$EXECUTABLE_NAME</string>
   <key>CFBundleIconFile</key>
   <string>AppIcon</string>
   <key>CFBundleIdentifier</key>
