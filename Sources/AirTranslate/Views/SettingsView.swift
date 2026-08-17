@@ -529,6 +529,36 @@ struct SettingsView: View {
                 )
             }
 
+            SettingsGroup(title: AppText.sentencePanel) {
+                SettingsControlRow(
+                    title: AppText.sentencePanelBackgroundOpacity,
+                    detail: AppText.sentencePanelBackgroundOpacityDescription,
+                    systemImage: "circle.lefthalf.filled"
+                ) {
+                    SettingsVolumeSlider(
+                        value: $session.sentencePanelBackgroundOpacity,
+                        range: 0.1...1,
+                        accessibilityLabel: AppText.sentencePanelBackgroundOpacity
+                    )
+                }
+
+                SettingsControlRow(
+                    title: AppText.sentencePanelFontSize,
+                    detail: AppText.sentencePanelDescription,
+                    systemImage: "textformat.size"
+                ) {
+                    Stepper(
+                        value: $session.sentencePanelFontSize,
+                        in: 11...28,
+                        step: 1
+                    ) {
+                        Text("\(Int(session.sentencePanelFontSize)) pt")
+                            .monospacedDigit()
+                    }
+                    .frame(width: 104)
+                }
+            }
+
             Label(SettingsCopy.floatingFooter, systemImage: "info.circle")
                 .font(.caption)
                 .foregroundStyle(.secondary)

@@ -39,6 +39,8 @@ private enum SettingsKey {
     static let floatingCaptionTextSize = "floatingCaptionTextSize"
     static let floatingCaptionLineCount = "floatingCaptionLineCount"
     static let keepsFloatingCaptionAboveOtherWindows = "keepsFloatingCaptionAboveOtherWindows"
+    static let sentencePanelBackgroundOpacity = "sentencePanelBackgroundOpacity"
+    static let sentencePanelFontSize = "sentencePanelFontSize"
     static let paragraphBreakSilenceInterval = "paragraphBreakSilenceInterval"
     static let savedTranscriptContentMode = "savedTranscriptContentMode"
     static let sessionDurationMode = "sessionDurationMode"
@@ -453,6 +455,12 @@ final class TranslationSessionStore {
         didSet { persistSelectedSettings() }
     }
     var keepsFloatingCaptionAboveOtherWindows = true {
+        didSet { persistSelectedSettings() }
+    }
+    var sentencePanelBackgroundOpacity = 0.78 {
+        didSet { persistSelectedSettings() }
+    }
+    var sentencePanelFontSize = 15.0 {
         didSet { persistSelectedSettings() }
     }
     var paragraphBreakSilenceInterval = 5.0 {
@@ -2166,6 +2174,12 @@ final class TranslationSessionStore {
         if defaults.object(forKey: SettingsKey.keepsFloatingCaptionAboveOtherWindows) != nil {
             keepsFloatingCaptionAboveOtherWindows = defaults.bool(forKey: SettingsKey.keepsFloatingCaptionAboveOtherWindows)
         }
+        if defaults.object(forKey: SettingsKey.sentencePanelBackgroundOpacity) != nil {
+            sentencePanelBackgroundOpacity = min(max(defaults.double(forKey: SettingsKey.sentencePanelBackgroundOpacity), 0.1), 1)
+        }
+        if defaults.object(forKey: SettingsKey.sentencePanelFontSize) != nil {
+            sentencePanelFontSize = min(max(defaults.double(forKey: SettingsKey.sentencePanelFontSize), 11), 28)
+        }
         if defaults.object(forKey: SettingsKey.paragraphBreakSilenceInterval) != nil {
             paragraphBreakSilenceInterval = min(
                 max(defaults.double(forKey: SettingsKey.paragraphBreakSilenceInterval), 1),
@@ -2231,6 +2245,8 @@ final class TranslationSessionStore {
         defaults.set(floatingCaptionTextSize.id, forKey: SettingsKey.floatingCaptionTextSize)
         defaults.set(floatingCaptionLineCount.id, forKey: SettingsKey.floatingCaptionLineCount)
         defaults.set(keepsFloatingCaptionAboveOtherWindows, forKey: SettingsKey.keepsFloatingCaptionAboveOtherWindows)
+        defaults.set(sentencePanelBackgroundOpacity, forKey: SettingsKey.sentencePanelBackgroundOpacity)
+        defaults.set(sentencePanelFontSize, forKey: SettingsKey.sentencePanelFontSize)
         defaults.set(paragraphBreakSilenceInterval, forKey: SettingsKey.paragraphBreakSilenceInterval)
         defaults.set(savedTranscriptContentMode.id, forKey: SettingsKey.savedTranscriptContentMode)
         defaults.set(sessionDurationMode.id, forKey: SettingsKey.sessionDurationMode)

@@ -5,6 +5,7 @@ struct ContentView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isLibraryPresented = false
     @State private var isFloatingCaptionVisible = FloatingCaptionWindowController.isOpen
+    @State private var isSentencePanelVisible = SentencePanelWindowController.isOpen
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -68,6 +69,16 @@ struct ContentView: View {
                 .accessibilityAddTraits(isFloatingCaptionVisible ? .isSelected : [])
 
                 Button {
+                    toggleSentencePanel()
+                } label: {
+                    Image(systemName: isSentencePanelVisible ? "list.bullet.rectangle.fill" : "list.bullet.rectangle")
+                }
+                .buttonBorderShape(.roundedRectangle)
+                .help(isSentencePanelVisible ? AppText.hideSentencePanel : AppText.showSentencePanel)
+                .accessibilityLabel(AppText.sentencePanel)
+                .accessibilityAddTraits(isSentencePanelVisible ? .isSelected : [])
+
+                Button {
                     isLibraryPresented = true
                 } label: {
                     Image(systemName: "tray.full")
@@ -93,6 +104,9 @@ struct ContentView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: FloatingCaptionWindowController.visibilityDidChangeNotification)) { _ in
             syncFloatingCaptionVisibility()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: SentencePanelWindowController.visibilityDidChangeNotification)) { _ in
+            isSentencePanelVisible = SentencePanelWindowController.isOpen
         }
         .animation(reduceMotion ? nil : .spring(response: 0.26, dampingFraction: 0.84), value: session.toastSequence)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: session.toastMessage)
@@ -158,6 +172,11 @@ struct ContentView: View {
 
     private func syncFloatingCaptionVisibility() {
         isFloatingCaptionVisible = FloatingCaptionWindowController.isOpen
+    }
+
+    private func toggleSentencePanel() {
+        SentencePanelWindowController.toggle(session: session)
+        isSentencePanelVisible = SentencePanelWindowController.isOpen
     }
 
     private var autoDetectionLanguageChangeBinding: Binding<Bool> {

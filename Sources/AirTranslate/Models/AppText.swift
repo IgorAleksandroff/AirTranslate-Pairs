@@ -445,6 +445,23 @@ enum AppText {
     static let menuBarRunningTitle = localized(english: "Live", korean: "기록 중")
     static let menuBarPausedTitle = localized(english: "Paused", korean: "일시정지")
     static let floatingCaptions = localized(english: "Floating Captions", korean: "플로팅 자막")
+    static let sentencePanel = localized(english: "Sentence Panel", korean: "문장 패널", japanese: "文章パネル", chineseSimplified: "句子面板")
+    static let showSentencePanel = localized(english: "Show Sentence Panel", korean: "문장 패널 표시", japanese: "文章パネルを表示", chineseSimplified: "显示句子面板")
+    static let hideSentencePanel = localized(english: "Hide Sentence Panel", korean: "문장 패널 숨기기", japanese: "文章パネルを隠す", chineseSimplified: "隐藏句子面板")
+    static let sentencePanelDescription = localized(
+        english: "Resizable always-on-top list of sentence pairs, newest first.",
+        korean: "최신 문장이 위에 오는 크기 조절 가능한 문장 쌍 목록입니다.",
+        japanese: "最新の文が上に来る、サイズ変更可能な文ペアのリストです。",
+        chineseSimplified: "可调整大小的句子对列表，最新句子在最上方。"
+    )
+    static let sentencePanelBackgroundOpacity = localized(english: "Panel Opacity", korean: "패널 불투명도", japanese: "パネルの不透明度", chineseSimplified: "面板不透明度")
+    static let sentencePanelBackgroundOpacityDescription = localized(
+        english: "Background opacity of the sentence panel. Text stays fully opaque.",
+        korean: "문장 패널 배경의 불투명도입니다. 텍스트는 항상 선명하게 표시됩니다.",
+        japanese: "文章パネル背景の不透明度です。テキストは常に不透明です。",
+        chineseSimplified: "句子面板背景的不透明度。文字始终保持清晰。"
+    )
+    static let sentencePanelFontSize = localized(english: "Panel Text Size", korean: "패널 글자 크기", japanese: "パネルの文字サイズ", chineseSimplified: "面板文字大小")
     static let showFloatingCaptions = localized(
         english: "Show Floating Captions",
         korean: "플로팅 자막 보기",

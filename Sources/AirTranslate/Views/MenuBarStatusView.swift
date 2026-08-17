@@ -5,6 +5,7 @@ struct MenuBarStatusView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.openSettings) private var openSettings
     @State private var isFloatingCaptionVisible = FloatingCaptionWindowController.isOpen
+    @State private var isSentencePanelVisible = SentencePanelWindowController.isOpen
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -91,6 +92,24 @@ struct MenuBarStatusView: View {
             .help(isFloatingCaptionVisible ? AppText.hideFloatingCaptions : AppText.showFloatingCaptions)
             .accessibilityLabel(isFloatingCaptionVisible ? AppText.hideFloatingCaptions : AppText.showFloatingCaptions)
             .accessibilityValue(isFloatingCaptionVisible ? AppText.floatingCaptionPowerOn : AppText.floatingCaptionPowerOff)
+
+            Button {
+                SentencePanelWindowController.toggle(session: session)
+                isSentencePanelVisible = SentencePanelWindowController.isOpen
+            } label: {
+                IconPanelButtonLabel(
+                    systemImage: isSentencePanelVisible ? "list.bullet.rectangle.fill" : "list.bullet.rectangle",
+                    title: isSentencePanelVisible ? AppText.hideSentencePanel : AppText.showSentencePanel,
+                    subtitle: isSentencePanelVisible ? AppText.floatingCaptionPowerOn : AppText.floatingCaptionPowerOff,
+                    accentColor: isSentencePanelVisible ? .green : .secondary,
+                    isSelected: isSentencePanelVisible
+                )
+            }
+            .buttonStyle(AirTranslatePressButtonStyle())
+            .help(isSentencePanelVisible ? AppText.hideSentencePanel : AppText.showSentencePanel)
+            .onReceive(NotificationCenter.default.publisher(for: SentencePanelWindowController.visibilityDidChangeNotification)) { _ in
+                isSentencePanelVisible = SentencePanelWindowController.isOpen
+            }
 
             Button {
                 openWindow(id: AirTranslateWindowID.main)
