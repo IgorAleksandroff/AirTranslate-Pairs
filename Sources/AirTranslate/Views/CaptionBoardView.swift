@@ -106,10 +106,7 @@ private struct CaptionTranscriptFeed: View {
                         ForEach(session.lines) { line in
                             let pairs = line.sentencePairs(sourceLanguageID: session.sourceLanguage.id)
                             ForEach(pairs) { pair in
-                                SentencePairRow(
-                                    pair: pair,
-                                    isPending: !line.isFinal && pair.id == pairs.last?.id
-                                )
+                                SentencePairRow(pair: pair, session: session)
                             }
                             Color.clear
                                 .frame(height: 1)
@@ -237,20 +234,25 @@ private struct SentencePairsHeader: View {
 
 private struct SentencePairRow: View {
     let pair: SentencePair
-    let isPending: Bool
+    let session: TranslationSessionStore
 
     var body: some View {
-        HStack(alignment: .top, spacing: 16) {
-            Text(pair.source)
-                .foregroundStyle(isPending ? .secondary : .primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(pair.translated ?? "…")
-                .fontWeight(.medium)
-                .foregroundStyle(pair.translated == nil ? .tertiary : .primary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .font(.body)
-        .textSelection(.enabled)
+        AlignedSentencePairView(
+            pair: pair,
+            alignments: session.wordAlignments,
+            sourceLanguage: session.sourceLanguage,
+            targetLanguage: session.targetLanguage,
+            style: .init(
+                sourceFont: .body,
+                translationFont: .body.weight(.medium),
+                translationPointSize: NSFont.systemFontSize,
+                sourceColor: .primary,
+                translationColor: .primary,
+                pendingColor: .secondary,
+                translationMinimumLines: 0
+            ),
+            axis: .horizontal
+        )
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .padding(.top, pair.startsParagraph ? 14 : 0)

@@ -87,6 +87,7 @@ final class SentencePanelWindowController: NSObject, NSWindowDelegate {
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
         panel.isMovableByWindowBackground = true
+        panel.acceptsMouseMovedEvents = true
         panel.titleVisibility = .hidden
         panel.titlebarAppearsTransparent = true
         panel.backgroundColor = .clear

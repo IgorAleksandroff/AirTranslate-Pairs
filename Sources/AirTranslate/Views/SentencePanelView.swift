@@ -71,17 +71,23 @@ struct SentencePanelView: View {
     }
 
     private func row(_ entry: Entry) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(entry.pair.source)
-                .font(.system(size: fontSize, weight: .medium))
-                .foregroundStyle(.white.opacity(0.96))
-            // Reserve two lines so rows do not jump while the translation streams in.
-            Text(entry.pair.translated ?? "…")
-                .font(.system(size: fontSize, weight: .regular))
-                .foregroundStyle(.white.opacity(entry.pair.translated == nil ? 0.35 : 0.6))
-                .lineLimit(2...)
-        }
-        .textSelection(.enabled)
+        AlignedSentencePairView(
+            pair: entry.pair,
+            alignments: session.wordAlignments,
+            sourceLanguage: session.sourceLanguage,
+            targetLanguage: session.targetLanguage,
+            style: .init(
+                sourceFont: .system(size: fontSize, weight: .medium),
+                translationFont: .system(size: fontSize, weight: .regular),
+                translationPointSize: fontSize,
+                sourceColor: .white.opacity(0.96),
+                translationColor: .white.opacity(0.6),
+                pendingColor: .white.opacity(0.35),
+                // Reserve two lines so rows do not jump while the translation streams in.
+                translationMinimumLines: 2
+            ),
+            axis: .vertical
+        )
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)

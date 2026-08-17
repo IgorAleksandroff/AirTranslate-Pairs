@@ -515,6 +515,7 @@ final class TranslationSessionStore {
     @ObservationIgnored nonisolated private let openAITerminalTranscriptMailbox =
         OpenAITerminalTranscriptMailbox()
     private let translator = AppleTranslationService()
+    let wordAlignments = WordAlignmentStore()
     private let openAITranslator = OpenAITranslationService()
     private let foundationTranscriptPolisher = FoundationTranscriptPolisher()
     private let speechOutput = TranslatedSpeechOutput()

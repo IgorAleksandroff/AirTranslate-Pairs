@@ -74,6 +74,44 @@ actor AppleTranslationService {
         return response.targetText
     }
 
+    func translateBatch(
+        _ texts: [String],
+        source: LanguageOption,
+        target: LanguageOption
+    ) async throws -> [String] {
+        guard !texts.isEmpty else { return [] }
+
+        let sourceLanguage = Locale.Language(identifier: source.id)
+        let targetLanguage = Locale.Language(identifier: target.id)
+        let cacheKey = languagePairKey(source: source, target: target)
+        let status = try await availabilityStatus(
+            source: sourceLanguage,
+            target: targetLanguage,
+            cacheKey: cacheKey,
+            sourceTitle: source.localizedTitle,
+            targetTitle: target.localizedTitle
+        )
+        guard status != .unsupported else {
+            throw TranslationServiceError.unsupportedPair(source.localizedTitle, target.localizedTitle)
+        }
+
+        let session = translationSession(source: sourceLanguage, target: targetLanguage, cacheKey: cacheKey)
+        if !(await session.isReady) {
+            try await session.prepareTranslation()
+        }
+
+        let requests = texts.enumerated().map { TranslationSession.Request(sourceText: $1, clientIdentifier: String($0)) }
+        let responses = try await session.translations(from: requests)
+        var results = Array(repeating: "", count: texts.count)
+        for response in responses {
+            guard let identifier = response.clientIdentifier, let index = Int(identifier), results.indices.contains(index) else {
+                throw TranslationServiceError.batchResponseMismatch
+            }
+            results[index] = response.targetText
+        }
+        return results
+    }
+
     private func languagePairKey(source: LanguageOption, target: LanguageOption) -> String {
         "\(source.id)->\(target.id)"
     }
@@ -114,11 +152,14 @@ actor AppleTranslationService {
 
 enum TranslationServiceError: LocalizedError {
     case unsupportedPair(String, String)
+    case batchResponseMismatch
 
     var errorDescription: String? {
         switch self {
         case let .unsupportedPair(source, target):
             AppText.unsupportedTranslation(source: source, target: target)
+        case .batchResponseMismatch:
+            "Translation batch returned responses that do not match the request."
         }
     }
 }

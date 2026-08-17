@@ -79,6 +79,24 @@ struct SentencePairTests {
     }
 
     @Test
+    func stemMatchingToleratesInflectionButNotShortPrefixes() {
+        #expect(WordTokens.stemsMatch("исследование", "исследования"))
+        #expect(WordTokens.stemsMatch("показало", "показывает"))
+        #expect(WordTokens.stemsMatch("studies", "study"))
+        #expect(!WordTokens.stemsMatch("подход", "поднял"))
+        #expect(!WordTokens.stemsMatch("found", "find"))
+        #expect(WordTokens.normalized("(2025),") == "2025")
+    }
+
+    @Test
+    func alignmentIsBidirectional() {
+        let alignment = SentenceAlignment(pairs: [(0, 2), (0, 3), (4, 1)])
+        #expect(alignment.sourceToTarget[0] == [2, 3])
+        #expect(alignment.targetToSource[1] == [4])
+        #expect(alignment.targetToSource[2] == [0])
+    }
+
+    @Test
     func sentencePairsLookUpTranslationsAndMarkParagraphStarts() {
         let line = CaptionLine(
             sourceText: "Hello there.\nHow are you?\n\nI am fine",
