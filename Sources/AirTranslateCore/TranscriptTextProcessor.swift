@@ -71,9 +71,14 @@ package enum TranscriptTextProcessor {
 
     package static let longSentenceWordCount = 5
     package static let minimumClauseWordCount = 3
+    package static let maximumClauseWordCount = 10
     private static let functionWords: Set<String> = [
         "a", "an", "the", "of", "to", "in", "on", "at", "for", "by", "with", "from", "into", "onto",
         "over", "under", "about", "as", "and", "or", "but", "so", "nor", "if", "than", "up", "out", "off"
+    ]
+    private static let clauseBreakWords: Set<String> = [
+        "that", "which", "who", "whom", "whose", "because", "when", "while", "if", "and", "but", "so", "or",
+        "then", "where", "as", "since", "although", "though", "unless", "until", "after", "before", "whether"
     ]
 
     /// Long sentences are additionally split at clause punctuation so live pairs stay short.
@@ -110,13 +115,53 @@ package enum TranscriptTextProcessor {
                 merged.append(part)
             }
         }
-        return merged
+        return merged.flatMap(splitLongClause)
+    }
+
+    /// Greedy left-to-right split of clauses that run past `maximumClauseWordCount` content words,
+    /// preferring the last conjunction/relative word seen. Greedy on purpose: decisions depend only
+    /// on words already spoken, so a growing live sentence never re-splits its beginning.
+    private static func splitLongClause(_ clause: String) -> [String] {
+        let words = clause.split(whereSeparator: \.isWhitespace).map(String.init)
+        var result: [String] = []
+        var start = 0
+        var contentCount = 0
+        var lastBreak: Int?
+
+        for index in words.indices {
+            let word = normalizedWord(words[index])
+            if index > start, clauseBreakWords.contains(word), contentCount >= minimumClauseWordCount {
+                lastBreak = index
+            }
+            if !functionWords.contains(word) {
+                contentCount += 1
+            }
+            guard contentCount > maximumClauseWordCount else { continue }
+
+            let cut = lastBreak ?? index
+            result.append(words[start..<cut].joined(separator: " "))
+            start = cut
+            contentCount = words[cut...index].filter { !functionWords.contains(normalizedWord($0)) }.count
+            lastBreak = nil
+        }
+
+        let tail = words[start...].joined(separator: " ")
+        if let last = result.last, wordCount(tail) < minimumClauseWordCount {
+            result[result.count - 1] = last + " " + tail
+        } else if !tail.isEmpty {
+            result.append(tail)
+        }
+        return result
+    }
+
+    private static func normalizedWord(_ word: String) -> String {
+        word.trimmingCharacters(in: .punctuationCharacters).lowercased()
     }
 
     // Content words only: articles, prepositions and conjunctions do not make a sentence "long".
     private static func wordCount(_ text: String) -> Int {
         text.split(whereSeparator: \.isWhitespace)
-            .filter { !functionWords.contains($0.trimmingCharacters(in: .punctuationCharacters).lowercased()) }
+            .filter { !functionWords.contains(normalizedWord(String($0))) }
             .count
     }
 

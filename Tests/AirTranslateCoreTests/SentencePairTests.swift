@@ -48,6 +48,24 @@ struct SentencePairTests {
     }
 
     @Test
+    func longClausesWithoutPunctuationSplitBeforeConjunctions() {
+        let sentence = "A 2025 peer reviewed study in frontiers in psychology found that gamification feature richness follows an S shaped curb,"
+        #expect(TranscriptTextProcessor.clauses(from: sentence) == [
+            "A 2025 peer reviewed study in frontiers in psychology found",
+            "that gamification feature richness follows an S shaped curb,"
+        ])
+        // Greedy: the split of the growing prefix matches the split of the full sentence.
+        let prefix = "A 2025 peer reviewed study in frontiers in psychology found that gamification feature richness"
+        #expect(TranscriptTextProcessor.clauses(from: prefix).first == "A 2025 peer reviewed study in frontiers in psychology found")
+        // No conjunction at all: cut on a word boundary once the limit is passed.
+        let plain = "one two three four five six seven eight nine ten eleven twelve thirteen fourteen"
+        #expect(TranscriptTextProcessor.clauses(from: plain) == [
+            "one two three four five six seven eight nine ten",
+            "eleven twelve thirteen fourteen"
+        ])
+    }
+
+    @Test
     func appendOnlyPartialKeepsShownWordsAndGrowsTail() {
         #expect(TranscriptTextProcessor.appendOnlyPartialText(current: "", incoming: "I think") == "I think")
         #expect(TranscriptTextProcessor.appendOnlyPartialText(current: "I think we sh", incoming: "I think we should")
