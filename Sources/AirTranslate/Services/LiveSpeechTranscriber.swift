@@ -108,6 +108,13 @@ protocol LiveSpeechTranscriberDelegate: AnyObject {
     )
     func liveSpeechTranscriber(
         _ transcriber: LiveSpeechTranscriber,
+        didRecognize text: String,
+        language: LanguageOption,
+        confidence: Double,
+        isFinal: Bool
+    )
+    func liveSpeechTranscriber(
+        _ transcriber: LiveSpeechTranscriber,
         didTranslate text: String,
         language: LanguageOption,
         confidence: Double
@@ -126,6 +133,16 @@ protocol LiveSpeechTranscriberDelegate: AnyObject {
 }
 
 extension LiveSpeechTranscriberDelegate {
+    func liveSpeechTranscriber(
+        _ transcriber: LiveSpeechTranscriber,
+        didRecognize text: String,
+        language: LanguageOption,
+        confidence: Double,
+        isFinal _: Bool
+    ) {
+        liveSpeechTranscriber(transcriber, didRecognize: text, language: language, confidence: confidence)
+    }
+
     func liveSpeechTranscriber(
         _ transcriber: LiveSpeechTranscriber,
         didTranslate text: String,
@@ -509,7 +526,8 @@ final class LiveSpeechTranscriber: @unchecked Sendable {
                                     self,
                                     didRecognize: text,
                                     language: entry.language,
-                                    confidence: Self.averageConfidence(in: result.text)
+                                    confidence: Self.averageConfidence(in: result.text),
+                                    isFinal: result.isFinal
                                 )
                             }
                         } catch {

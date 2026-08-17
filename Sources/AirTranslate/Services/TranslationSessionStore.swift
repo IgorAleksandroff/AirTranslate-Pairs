@@ -69,6 +69,7 @@ private struct PendingRecognizedCaption {
     let sourceText: String
     let recognizedLanguage: LanguageOption
     let confidence: Double
+    let isFinal: Bool
 }
 
 struct StartConfiguration: Equatable {
@@ -547,6 +548,8 @@ final class TranslationSessionStore {
     private var translationBurstStartedAt = Date.distantPast
     private var committedSourceText = ""
     private var currentPartialText = ""
+    // Latest recognizer hypothesis for the current partial; the displayed partial only ever grows until a final arrives.
+    private var latestRecognizerPartialText = ""
     private var currentPartialLanguage: LanguageOption?
     private var pendingParagraphBreakBeforePartial = false
     private var floatingCommittedSourceText = ""
@@ -1964,6 +1967,7 @@ final class TranslationSessionStore {
         isLargeTranscriptRecognitionCoalescingActive = false
         committedSourceText = ""
         currentPartialText = ""
+        latestRecognizerPartialText = ""
         currentPartialLanguage = nil
         appleAutoDetectionPreferredLanguage = nil
         pendingAutoDetectionLanguageChange = nil
@@ -2703,7 +2707,8 @@ final class TranslationSessionStore {
     private func enqueueRecognizedCaption(
         sourceText: String,
         recognizedLanguage: LanguageOption,
-        confidence: Double
+        confidence: Double,
+        isFinal: Bool = false
     ) {
         if !isLargeTranscriptRecognitionCoalescingActive {
             let currentSourceLength = lines.last?.sourceText.utf16.count ?? 0
@@ -2718,7 +2723,7 @@ final class TranslationSessionStore {
                 sourceText: sourceText,
                 recognizedLanguage: recognizedLanguage,
                 confidence: confidence,
-                isFinal: false
+                isFinal: isFinal
             )
             return
         }
@@ -2726,7 +2731,8 @@ final class TranslationSessionStore {
         pendingRecognizedCaption = PendingRecognizedCaption(
             sourceText: sourceText,
             recognizedLanguage: recognizedLanguage,
-            confidence: confidence
+            confidence: confidence,
+            isFinal: isFinal
         )
         guard recognizedCaptionDeliveryTask == nil else { return }
 
@@ -2755,7 +2761,7 @@ final class TranslationSessionStore {
             sourceText: pendingRecognizedCaption.sourceText,
             recognizedLanguage: pendingRecognizedCaption.recognizedLanguage,
             confidence: pendingRecognizedCaption.confidence,
-            isFinal: false
+            isFinal: pendingRecognizedCaption.isFinal
         )
     }
 
@@ -2949,6 +2955,7 @@ final class TranslationSessionStore {
 
         if currentPartialText.isEmpty {
             currentPartialText = incomingPartial
+            latestRecognizerPartialText = incomingPartial
             currentPartialLanguage = language
             setFloatingCurrentPartialText(incomingPartial)
             return visibleTranscript()
@@ -2959,13 +2966,18 @@ final class TranslationSessionStore {
             pendingParagraphBreakBeforePartial = hadLongSilence && !committedSourceText.isEmpty
             pendingFloatingParagraphBreakBeforePartial = hadLongSilence && !floatingCommittedSourceText.isEmpty
             currentPartialText = incomingPartial
+            latestRecognizerPartialText = incomingPartial
             currentPartialLanguage = language
             setFloatingCurrentPartialText(currentPartialText)
             return visibleTranscript()
         }
 
         if isRevisionOfCurrentPartial(incomingPartial) {
-            currentPartialText = preferredPartialText(current: currentPartialText, incoming: incomingPartial)
+            let preferredRecognizerText = preferredPartialText(current: latestRecognizerPartialText, incoming: incomingPartial)
+            latestRecognizerPartialText = preferredRecognizerText
+            currentPartialText = isFinal
+                ? preferredRecognizerText
+                : TranscriptTextProcessor.appendOnlyPartialText(current: currentPartialText, incoming: preferredRecognizerText)
             setFloatingCurrentPartialText(currentPartialText)
             return visibleTranscript()
         }
@@ -2974,6 +2986,7 @@ final class TranslationSessionStore {
            !isFinal,
            isVolatileFragmentSuperseded(by: incomingPartial) {
             currentPartialText = incomingPartial
+            latestRecognizerPartialText = incomingPartial
             setFloatingCurrentPartialText(currentPartialText)
             return visibleTranscript()
         }
@@ -2987,6 +3000,7 @@ final class TranslationSessionStore {
             allowsCommittedReplay: true,
             language: language
         )
+        latestRecognizerPartialText = currentPartialText
         currentPartialLanguage = language
         setFloatingCurrentPartialText(currentPartialText)
         return visibleTranscript()
@@ -3051,7 +3065,7 @@ final class TranslationSessionStore {
 
     private func isRevisionOfCurrentPartial(_ incomingPartial: String) -> Bool {
         TranscriptTextProcessor.isRevisionOfCurrentPartial(
-            current: currentPartialText,
+            current: latestRecognizerPartialText,
             incoming: incomingPartial
         )
     }
@@ -3062,7 +3076,7 @@ final class TranslationSessionStore {
 
     private func isVolatileFragmentSuperseded(by incomingPartial: String) -> Bool {
         TranscriptTextProcessor.isVolatileFragmentSuperseded(
-            current: currentPartialText,
+            current: latestRecognizerPartialText,
             incoming: incomingPartial
         )
     }
@@ -3073,9 +3087,10 @@ final class TranslationSessionStore {
 
     private func commitCurrentPartial() {
         let language = currentPartialLanguage ?? sourceLanguage
+        let partialText = latestRecognizerPartialText.isEmpty ? currentPartialText : latestRecognizerPartialText
         let partial = isUsingOpenAIRealtime
-            ? currentPartialText.trimmingCharacters(in: .whitespacesAndNewlines)
-            : organizeTranscript(currentPartialText, language: language)
+            ? partialText.trimmingCharacters(in: .whitespacesAndNewlines)
+            : organizeTranscript(partialText, language: language)
         guard !partial.isEmpty else { return }
 
         var didAppendCommittedPartial = false
@@ -3094,6 +3109,7 @@ final class TranslationSessionStore {
         }
         pendingParagraphBreakBeforePartial = false
         currentPartialText = ""
+        latestRecognizerPartialText = ""
         currentPartialLanguage = nil
 
         if didAppendCommittedPartial {
@@ -3443,6 +3459,7 @@ final class TranslationSessionStore {
 
         committedSourceText = organizedSourceText
         currentPartialText = ""
+        latestRecognizerPartialText = ""
         lines[index] = CaptionLine(
             id: line.id,
             sourceText: organizedSourceText,
@@ -4609,6 +4626,16 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
         language: LanguageOption,
         confidence: Double
     ) {
+        liveSpeechTranscriber(transcriber, didRecognize: text, language: language, confidence: confidence, isFinal: false)
+    }
+
+    nonisolated func liveSpeechTranscriber(
+        _ transcriber: LiveSpeechTranscriber,
+        didRecognize text: String,
+        language: LanguageOption,
+        confidence: Double,
+        isFinal: Bool
+    ) {
         Task { @MainActor in
             guard activeGeneration(for: transcriber, requiresRunning: true) != nil else {
                 return
@@ -4616,7 +4643,8 @@ extension TranslationSessionStore: LiveSpeechTranscriberDelegate {
             enqueueRecognizedCaption(
                 sourceText: text,
                 recognizedLanguage: language,
-                confidence: confidence
+                confidence: confidence,
+                isFinal: isFinal
             )
         }
     }

@@ -39,6 +39,28 @@ struct SentencePairTests {
     }
 
     @Test
+    func clauseThresholdCountsContentWordsOnly() {
+        // 5 content words ("Yes I agree that plan") + function words → not long.
+        #expect(TranscriptTextProcessor.clauses(from: "Yes, I agree with the plan.") == ["Yes, I agree with the plan."])
+        // 6 content words → long, split at the comma; both clauses have ≥3 content words.
+        #expect(TranscriptTextProcessor.clauses(from: "Yes I agree completely, we ship tomorrow morning.")
+            == ["Yes I agree completely,", "we ship tomorrow morning."])
+    }
+
+    @Test
+    func appendOnlyPartialKeepsShownWordsAndGrowsTail() {
+        #expect(TranscriptTextProcessor.appendOnlyPartialText(current: "", incoming: "I think") == "I think")
+        #expect(TranscriptTextProcessor.appendOnlyPartialText(current: "I think we sh", incoming: "I think we should")
+            == "I think we should")
+        #expect(TranscriptTextProcessor.appendOnlyPartialText(current: "I think we should", incoming: "I thing we shall go now")
+            == "I think we shall go now")
+        #expect(TranscriptTextProcessor.appendOnlyPartialText(current: "alpha bravo juliet", incoming: "alpha bravo kilogram")
+            == "alpha bravo kilogram")
+        #expect(TranscriptTextProcessor.appendOnlyPartialText(current: "I think we should go", incoming: "I think we")
+            == "I think we should go")
+    }
+
+    @Test
     func sentencePairsLookUpTranslationsAndMarkParagraphStarts() {
         let line = CaptionLine(
             sourceText: "Hello there.\nHow are you?\n\nI am fine",

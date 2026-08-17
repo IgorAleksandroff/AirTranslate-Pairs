@@ -69,8 +69,12 @@ package enum TranscriptTextProcessor {
             .filter { !$0.isEmpty }
     }
 
-    package static let longSentenceWordCount = 8
+    package static let longSentenceWordCount = 5
     package static let minimumClauseWordCount = 3
+    private static let functionWords: Set<String> = [
+        "a", "an", "the", "of", "to", "in", "on", "at", "for", "by", "with", "from", "into", "onto",
+        "over", "under", "about", "as", "and", "or", "but", "so", "nor", "if", "than", "up", "out", "off"
+    ]
 
     /// Long sentences are additionally split at clause punctuation so live pairs stay short.
     /// Short fragments are glued to their neighbour; "1,000" style commas are left alone.
@@ -109,8 +113,23 @@ package enum TranscriptTextProcessor {
         return merged
     }
 
+    // Content words only: articles, prepositions and conjunctions do not make a sentence "long".
     private static func wordCount(_ text: String) -> Int {
-        text.split(whereSeparator: \.isWhitespace).count
+        text.split(whereSeparator: \.isWhitespace)
+            .filter { !functionWords.contains($0.trimmingCharacters(in: .punctuationCharacters).lowercased()) }
+            .count
+    }
+
+    /// Volatile recognizer hypotheses only ever extend the displayed partial: all words but the last
+    /// are kept, the last (still being spoken) word may be replaced, new words are appended.
+    /// Finals replace the partial wholesale.
+    package static func appendOnlyPartialText(current: String, incoming: String) -> String {
+        let currentWords = current.split(whereSeparator: \.isWhitespace).map(String.init)
+        let incomingWords = incoming.split(whereSeparator: \.isWhitespace).map(String.init)
+        guard !currentWords.isEmpty else { return incoming }
+        guard incomingWords.count >= currentWords.count else { return current }
+
+        return (currentWords.dropLast() + incomingWords[(currentWords.count - 1)...]).joined(separator: " ")
     }
 
     package static func paragraphParts(from text: String) -> [String] {
