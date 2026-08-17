@@ -1,3 +1,28 @@
+# AirTranslate Pairs
+
+A fork of [himomohi/AirTranslate](https://github.com/himomohi/AirTranslate) tuned for following English calls
+(Zoom / Google Meet) with a Russian translation alongside. Everything runs on-device (Apple SpeechAnalyzer +
+Apple Translation), no accounts, no cloud.
+
+What this fork adds:
+
+- **Sentence-by-sentence layout** — English and its translation are paired per sentence instead of two
+  independently growing text panes. Long sentences are further split at clause punctuation or before
+  conjunctions (greedy, so a growing live sentence never re-splits its beginning).
+- **Sentence Panel** — resizable, always-on-top floating list of pairs, newest first, English over a dimmed
+  translation, adjustable background opacity and text size.
+- **Append-only live English** — while a sentence is being spoken only new words are appended (the last word
+  may still change); the recognizer's final result corrects it once at the end.
+- **Hover word highlighting in both directions** — hover an English word to see its counterpart(s) in the
+  translation and vice versa. Heuristic alignment via per-word Apple Translation + stem matching, no LLM.
+- Russian added as a target language.
+
+Build: `./script/build_and_run.sh` (macOS 26, Xcode 26). The script signs with a local certificate named
+`AirTranslate Dev` so macOS privacy grants survive rebuilds — create it once in Keychain Access
+(Certificate Assistant → Create a Certificate → Self Signed Root, Code Signing), or pass `CODE_SIGN_IDENTITY`.
+
+---
+
 ![AirTranslate hero](docs/assets/airtranslate-readme-hero.png)
 
 # AirTranslate
