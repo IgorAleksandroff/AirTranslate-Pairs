@@ -317,7 +317,9 @@ enum AutoDetectionLanguageChangePolicy {
 @Observable
 @MainActor
 final class TranslationSessionStore {
-    private static let maxTranslationCacheEntries = 2_000
+    // Segments are single sentences/clauses now (~10 words); every update walks all of them,
+    // so the cache must hold a whole multi-hour session or translation starts thrashing.
+    private static let maxTranslationCacheEntries = 50_000
     private static let largeTranscriptPresentationCharacterLimit = 4_000
     private static let largeTranscriptPresentationInterval: TimeInterval = 0.35
     private static let largeTranscriptRecognitionDeliveryInterval: TimeInterval = 0.25
