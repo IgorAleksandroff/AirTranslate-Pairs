@@ -2015,6 +2015,7 @@ final class TranslationSessionStore {
                 sourceText: line.sourceText,
                 translatedText: message,
                 translatedSourceText: line.sourceText,
+                translationsBySentence: line.translationsBySentence,
                 createdAt: line.createdAt,
                 isFinal: line.isFinal,
                 revision: line.revision + 1,
@@ -2895,6 +2896,7 @@ final class TranslationSessionStore {
             sourceText: sourceText,
             translatedText: existingLine.translatedText,
             translatedSourceText: existingLine.translatedSourceText,
+            translationsBySentence: existingLine.translationsBySentence,
             createdAt: existingLine.createdAt,
             isFinal: isFinal,
             revision: existingLine.revision + 1,
@@ -3430,6 +3432,7 @@ final class TranslationSessionStore {
             sourceText: organizedSourceText,
             translatedText: organizedTranslatedText,
             translatedSourceText: line.translatedSourceText,
+            translationsBySentence: line.translationsBySentence,
             createdAt: line.createdAt,
             isFinal: line.isFinal,
             revision: line.revision + 1,
@@ -3625,20 +3628,27 @@ final class TranslationSessionStore {
         TranscriptTextProcessor.paragraphParts(from: text)
     }
 
+    struct TranscriptTranslation: Sendable {
+        let text: String
+        let translationsBySentence: [String: String]
+    }
+
     private func translateTranscript(
         _ text: String,
         source: LanguageOption,
         target: LanguageOption,
-        progress: @escaping @MainActor @Sendable (String) -> Void = { _ in }
-    ) async throws -> String {
+        progress: @escaping @MainActor @Sendable (TranscriptTranslation) -> Void = { _ in }
+    ) async throws -> TranscriptTranslation {
+        let sourceLanguageID = source.id
         let paragraphSegments = try await Task.detached(priority: .userInitiated) {
             try Task.checkCancellation()
-            return Self.translationSegmentGroups(from: text)
+            return TranscriptTextProcessor.sentenceGroups(from: text, languageID: sourceLanguageID)
         }.value
 
-        guard !paragraphSegments.isEmpty else { return "" }
+        guard !paragraphSegments.isEmpty else { return TranscriptTranslation(text: "", translationsBySentence: [:]) }
 
         var translatedParagraphs: [String] = []
+        var translationsBySentence: [String: String] = [:]
         var consecutiveCacheHitCount = 0
         for segments in paragraphSegments {
             var translatedSegments: [String] = []
@@ -3653,6 +3663,7 @@ final class TranslationSessionStore {
                         try Task.checkCancellation()
                     }
                     translatedSegments.append(cachedSegment)
+                    translationsBySentence[segment] = cachedSegment
                     continue
                 }
                 consecutiveCacheHitCount = 0
@@ -3671,7 +3682,7 @@ final class TranslationSessionStore {
                                 .joined(separator: "\n\n")
                                 .trimmingCharacters(in: .whitespacesAndNewlines)
                             guard !partialText.isEmpty else { return }
-                            progress(partialText)
+                            progress(TranscriptTranslation(text: partialText, translationsBySentence: translationsBySentence))
                         }
                     )
                 } else {
@@ -3684,64 +3695,26 @@ final class TranslationSessionStore {
                 }
                 try Task.checkCancellation()
                 let organizedSegment = organizeTranscript(translatedSegment, language: target)
+                    .replacingOccurrences(of: "\n", with: " ")
                 cacheTranslatedSegment(organizedSegment, forKey: cacheKey)
                 translatedSegments.append(organizedSegment)
+                translationsBySentence[segment] = organizedSegment
 
                 let partialText = (translatedParagraphs + [translatedSegments.joined(separator: "\n")])
                     .joined(separator: "\n\n")
                     .trimmingCharacters(in: .whitespacesAndNewlines)
                 if !partialText.isEmpty {
-                    progress(partialText)
+                    progress(TranscriptTranslation(text: partialText, translationsBySentence: translationsBySentence))
                 }
             }
 
             translatedParagraphs.append(translatedSegments.joined(separator: "\n"))
         }
 
-        return translatedParagraphs.joined(separator: "\n\n")
-    }
-
-    nonisolated private static func translationSegmentGroups(from text: String) -> [[String]] {
-        TranscriptTextProcessor.paragraphParts(from: text)
-            .map { translationSegments(from: $0) }
-            .filter { !$0.isEmpty }
-    }
-
-    nonisolated private static func translationSegments(from paragraph: String) -> [String] {
-        paragraph
-            .split(separator: "\n", omittingEmptySubsequences: true)
-            .flatMap { splitTranslationSegment(String($0)) }
-    }
-
-    nonisolated private static func splitTranslationSegment(_ text: String) -> [String] {
-        let trimmedText = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmedText.isEmpty else { return [] }
-        guard trimmedText.utf16.count > 240 else { return [trimmedText] }
-
-        var segments: [String] = []
-        var current = ""
-
-        for character in trimmedText {
-            current.append(character)
-            let shouldBreakAtSentence = ".!?。！？".contains(character)
-                && current.utf16.count >= 80
-            let shouldBreakAtWhitespace = character.isWhitespace
-                && current.utf16.count >= 240
-
-            if shouldBreakAtSentence || shouldBreakAtWhitespace {
-                let segment = current.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !segment.isEmpty {
-                    segments.append(segment)
-                }
-                current = ""
-            }
-        }
-
-        let tail = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !tail.isEmpty {
-            segments.append(tail)
-        }
-        return segments
+        return TranscriptTranslation(
+            text: translatedParagraphs.joined(separator: "\n\n"),
+            translationsBySentence: translationsBySentence
+        )
     }
 
     private func translationCacheKey(segment: String, source: LanguageOption, target: LanguageOption) -> String {
@@ -3991,13 +3964,13 @@ final class TranslationSessionStore {
                 if latestTranslationRequest != nil {
                     continue
                 }
-                let translatedText = try await translateTranscript(
+                let translation = try await translateTranscript(
                     translationSourceText,
                     source: request.source,
                     target: request.target,
-                    progress: { [weak self] partialText in
+                    progress: { [weak self] partial in
                         self?.updateTranslation(
-                            partialText,
+                            partial,
                             for: request.line,
                             matching: request.sourceText,
                             finalizesRequest: false
@@ -4005,7 +3978,7 @@ final class TranslationSessionStore {
                     }
                 )
                 try Task.checkCancellation()
-                updateTranslation(translatedText, for: request.line, matching: request.sourceText)
+                updateTranslation(translation, for: request.line, matching: request.sourceText)
             } catch is CancellationError {
                 // A cancelled loop can resume after a newer loop was registered;
                 // only clear its own registration to avoid spawning a concurrent loop.
@@ -4080,7 +4053,7 @@ final class TranslationSessionStore {
     }
 
     private func updateTranslation(
-        _ translatedText: String,
+        _ translation: TranscriptTranslation,
         for line: CaptionLine,
         matching sourceText: String,
         finalizesRequest: Bool = true
@@ -4093,6 +4066,7 @@ final class TranslationSessionStore {
             }
             return
         }
+        let translatedText = translation.text
         let organizedTranslatedText = organizeTranscript(translatedText, language: targetLanguage)
         let floatingTranslatedText = translatedText.trimmingCharacters(in: .whitespacesAndNewlines)
         if finalizesRequest, pendingTranslationSourceText == sourceText {
@@ -4105,6 +4079,7 @@ final class TranslationSessionStore {
             sourceText: currentSourceText,
             translatedText: organizedTranslatedText,
             translatedSourceText: sourceText,
+            translationsBySentence: lines[index].translationsBySentence.merging(translation.translationsBySentence) { $1 },
             createdAt: line.createdAt,
             isFinal: line.isFinal,
             revision: lines[index].revision + 1,
@@ -4129,6 +4104,7 @@ final class TranslationSessionStore {
                     sourceText: line.sourceText,
                     translatedText: message,
                     translatedSourceText: line.sourceText,
+                    translationsBySentence: line.translationsBySentence,
                     createdAt: line.createdAt,
                     isFinal: line.isFinal,
                     revision: line.revision + 1,
@@ -4157,6 +4133,7 @@ final class TranslationSessionStore {
             sourceText: currentSourceText,
             translatedText: message,
             translatedSourceText: sourceText,
+            translationsBySentence: lines[index].translationsBySentence,
             createdAt: line.createdAt,
             isFinal: line.isFinal,
             revision: lines[index].revision + 1,

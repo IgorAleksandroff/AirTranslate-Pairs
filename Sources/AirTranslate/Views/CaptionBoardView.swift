@@ -61,6 +61,11 @@ private struct CaptionTranscriptFeed: View {
         session.lines.last.map { LatestLineKey(id: $0.id, revision: $0.revision) }
     }
 
+    // Provider realtime modes stream translation as free text without per-sentence mapping.
+    private var usesSentenceLayout: Bool {
+        session.shouldShowTranslationPane && !session.isUsingProviderRealtimeTranslation
+    }
+
     var body: some View {
         if !session.hasTranscriptContent && !session.isRunning {
             ContentUnavailableView(
@@ -96,18 +101,34 @@ private struct CaptionTranscriptFeed: View {
                             }
                     }
 
-                    ForEach(session.lines) { line in
-                        CaptionLineView(
-                            line: line,
-                            showsTranslationPane: session.shouldShowTranslationPane
-                        )
-                            .equatable()
-                            .id(line.id)
-                            .transition(
-                                reduceMotion
-                                    ? .opacity
-                                    : .move(edge: .bottom).combined(with: .opacity)
+                    if usesSentenceLayout {
+                        SentencePairsHeader()
+                        ForEach(session.lines) { line in
+                            let pairs = line.sentencePairs(sourceLanguageID: session.sourceLanguage.id)
+                            ForEach(pairs) { pair in
+                                SentencePairRow(
+                                    pair: pair,
+                                    isPending: !line.isFinal && pair.id == pairs.last?.id
+                                )
+                            }
+                            Color.clear
+                                .frame(height: 1)
+                                .id(line.id)
+                        }
+                    } else {
+                        ForEach(session.lines) { line in
+                            CaptionLineView(
+                                line: line,
+                                showsTranslationPane: session.shouldShowTranslationPane
                             )
+                                .equatable()
+                                .id(line.id)
+                                .transition(
+                                    reduceMotion
+                                        ? .opacity
+                                        : .move(edge: .bottom).combined(with: .opacity)
+                                )
+                        }
                     }
                 }
                 .padding(.vertical, 4)
@@ -195,6 +216,46 @@ private struct CaptionLineView: View, Equatable {
             displayText: line.translatedDisplayText,
             isPrimary: false
         )
+    }
+}
+
+private struct SentencePairsHeader: View {
+    var body: some View {
+        HStack(alignment: .center, spacing: 16) {
+            Text(AppText.original)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(AppText.translation)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.caption.weight(.semibold))
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+        .accessibilityAddTraits(.isHeader)
+    }
+}
+
+private struct SentencePairRow: View {
+    let pair: SentencePair
+    let isPending: Bool
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 16) {
+            Text(pair.source)
+                .foregroundStyle(isPending ? .secondary : .primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(pair.translated ?? "…")
+                .fontWeight(.medium)
+                .foregroundStyle(pair.translated == nil ? .tertiary : .primary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .font(.body)
+        .textSelection(.enabled)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .padding(.top, pair.startsParagraph ? 14 : 0)
+        .frame(maxWidth: .infinity, alignment: .topLeading)
+        .airTranslateSurface()
     }
 }
 

@@ -53,6 +53,22 @@ package enum TranscriptTextProcessor {
             .joined(separator: "\n")
     }
 
+    /// Paragraphs → sentences, using the same splitting rules as `organizeParagraph`,
+    /// so translation segments and displayed sentence pairs always line up.
+    package static func sentenceGroups(from text: String, languageID: String) -> [[String]] {
+        paragraphParts(from: text)
+            .map { paragraph in
+                paragraph
+                    .split(separator: "\n", omittingEmptySubsequences: true)
+                    .flatMap { line in
+                        organizeParagraph(String(line), languageID: languageID)
+                            .split(separator: "\n", omittingEmptySubsequences: true)
+                            .map(String.init)
+                    }
+            }
+            .filter { !$0.isEmpty }
+    }
+
     package static func paragraphParts(from text: String) -> [String] {
         let marker = "\u{1E}"
         let normalized = text

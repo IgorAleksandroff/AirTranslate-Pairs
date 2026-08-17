@@ -19,7 +19,8 @@ struct LanguageOption: Identifiable, Hashable, Sendable {
         .init(id: "zh-CN", title: "Chinese Simplified", locale: Locale(identifier: "zh-CN")),
         .init(id: "es-ES", title: "Spanish", locale: Locale(identifier: "es-ES")),
         .init(id: "fr-FR", title: "French", locale: Locale(identifier: "fr-FR")),
-        .init(id: "de-DE", title: "German", locale: Locale(identifier: "de-DE"))
+        .init(id: "de-DE", title: "German", locale: Locale(identifier: "de-DE")),
+        .init(id: "ru-RU", title: "Russian", locale: Locale(identifier: "ru-RU"))
     ]
 
     static func prioritizedAutoDetectionCandidates(
