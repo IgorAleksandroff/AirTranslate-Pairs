@@ -77,14 +77,12 @@ struct SentencePanelView: View {
             sourceLanguage: session.sourceLanguage,
             targetLanguage: session.targetLanguage,
             style: .init(
-                sourceFont: .system(size: fontSize, weight: .medium),
+                sourceFont: .system(size: fontSize, weight: .regular),
                 translationFont: .system(size: fontSize, weight: .regular),
-                translationPointSize: fontSize,
                 sourceColor: .white.opacity(0.96),
                 translationColor: .white.opacity(0.6),
                 pendingColor: .white.opacity(0.35),
-                // Reserve two lines so rows do not jump while the translation streams in.
-                translationMinimumLines: 2
+                translationMinimumLines: 1
             ),
             axis: .vertical
         )

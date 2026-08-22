@@ -549,7 +549,7 @@ struct SettingsView: View {
                 ) {
                     Stepper(
                         value: $session.sentencePanelFontSize,
-                        in: 11...28,
+                        in: 11...36,
                         step: 1
                     ) {
                         Text("\(Int(session.sentencePanelFontSize)) pt")

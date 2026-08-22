@@ -6,10 +6,10 @@ struct AlignedSentencePairView: View {
     struct Style {
         var sourceFont: Font
         var translationFont: Font
-        var translationPointSize: CGFloat
         var sourceColor: Color
         var translationColor: Color
         var pendingColor: Color
+        /// Lines always reserved for the translation (at least one), so the row does not jump when it arrives.
         var translationMinimumLines: Int
     }
 
@@ -69,29 +69,34 @@ struct AlignedSentencePairView: View {
         )
     }
 
-    @ViewBuilder
     private var translationText: some View {
-        if let translated = pair.translated {
-            WordFlowText(
-                tokens: WordTokens.split(translated),
-                font: style.translationFont,
-                color: style.translationColor,
-                hovered: hoveredTarget,
-                highlighted: hoveredSource.flatMap { alignment?.sourceToTarget[$0] } ?? [],
-                onHover: { hoveredTarget = $0 }
-            )
-            .frame(maxWidth: .infinity, minHeight: minimumTranslationHeight, alignment: .topLeading)
-        } else {
-            Text("…")
-                .font(style.translationFont)
-                .foregroundStyle(style.pendingColor)
-                .frame(maxWidth: .infinity, minHeight: minimumTranslationHeight, alignment: .topLeading)
+        ZStack(alignment: .topLeading) {
+            translationPlaceholder
+            if let translated = pair.translated {
+                WordFlowText(
+                    tokens: WordTokens.split(translated),
+                    font: style.translationFont,
+                    color: style.translationColor,
+                    hovered: hoveredTarget,
+                    highlighted: hoveredSource.flatMap { alignment?.sourceToTarget[$0] } ?? [],
+                    onHover: { hoveredTarget = $0 }
+                )
+            } else {
+                Text("…")
+                    .font(style.translationFont)
+                    .foregroundStyle(style.pendingColor)
+                    .padding(.vertical, 1)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .topLeading)
     }
 
-    private var minimumTranslationHeight: CGFloat? {
-        guard style.translationMinimumLines > 0 else { return nil }
-        // Approximate line height of the word flow (text + 1pt vertical padding each side + row spacing).
-        return CGFloat(style.translationMinimumLines) * (style.translationPointSize * 1.25 + 4)
+    // Invisible text of the reserved line count sets the minimum height with the real font metrics.
+    private var translationPlaceholder: some View {
+        Text(Array(repeating: "…", count: max(style.translationMinimumLines, 1)).joined(separator: "\n"))
+            .font(style.translationFont)
+            .padding(.vertical, 1)
+            .hidden()
+            .accessibilityHidden(true)
     }
 }

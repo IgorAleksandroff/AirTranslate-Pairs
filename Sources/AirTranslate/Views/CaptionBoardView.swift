@@ -245,11 +245,10 @@ private struct SentencePairRow: View {
             style: .init(
                 sourceFont: .body,
                 translationFont: .body.weight(.medium),
-                translationPointSize: NSFont.systemFontSize,
                 sourceColor: .primary,
                 translationColor: .primary,
                 pendingColor: .secondary,
-                translationMinimumLines: 0
+                translationMinimumLines: 1
             ),
             axis: .horizontal
         )

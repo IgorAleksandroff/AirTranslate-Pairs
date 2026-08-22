@@ -158,11 +158,7 @@ enum ModelAvailabilityChecker {
         source: LanguageOption,
         target: LanguageOption
     ) async throws {
-        let session = TranslationSession(
-            installedSource: Locale.Language(identifier: source.id),
-            target: Locale.Language(identifier: target.id)
-        )
-        try await session.prepareTranslation()
+        try await TranslationAssetDownloader.shared.download(source: source, target: target)
     }
 
     private static func availabilityState(

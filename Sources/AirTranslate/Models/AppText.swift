@@ -253,6 +253,14 @@ enum AppText {
         english: "Download the required language assets before starting.",
         korean: "시작하기 전에 필요한 언어 자산을 다운로드하세요."
     )
+    static let translationDownloadNeedsOpenWindow = localized(
+        english: "Open the AirTranslate window to download the translation languages.",
+        korean: "번역 언어를 다운로드하려면 AirTranslate 창을 여세요."
+    )
+    static let translationDownloadAlreadyInProgress = localized(
+        english: "A translation language download is already running.",
+        korean: "번역 언어 다운로드가 이미 진행 중입니다."
+    )
     static func startBlockedLocalAssetsUnavailable(_ detail: String) -> String {
         localized(
             english: "Required language assets are unavailable: \(detail)",

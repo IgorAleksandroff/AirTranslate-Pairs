@@ -463,7 +463,7 @@ final class TranslationSessionStore {
     var sentencePanelBackgroundOpacity = 0.78 {
         didSet { persistSelectedSettings() }
     }
-    var sentencePanelFontSize = 15.0 {
+    var sentencePanelFontSize = 18.0 {
         didSet { persistSelectedSettings() }
     }
     var paragraphBreakSilenceInterval = 5.0 {
@@ -2185,7 +2185,7 @@ final class TranslationSessionStore {
             sentencePanelBackgroundOpacity = min(max(defaults.double(forKey: SettingsKey.sentencePanelBackgroundOpacity), 0.1), 1)
         }
         if defaults.object(forKey: SettingsKey.sentencePanelFontSize) != nil {
-            sentencePanelFontSize = min(max(defaults.double(forKey: SettingsKey.sentencePanelFontSize), 11), 28)
+            sentencePanelFontSize = min(max(defaults.double(forKey: SettingsKey.sentencePanelFontSize), 11), 36)
         }
         if defaults.object(forKey: SettingsKey.paragraphBreakSilenceInterval) != nil {
             paragraphBreakSilenceInterval = min(

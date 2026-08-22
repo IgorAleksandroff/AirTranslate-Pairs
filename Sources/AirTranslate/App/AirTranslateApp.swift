@@ -16,6 +16,7 @@ struct AirTranslateApp: App {
             ContentView(session: session)
                 .frame(minWidth: 900, minHeight: 560)
                 .background(MenuBarPanelInstaller(session: session, controller: menuBarPanelController))
+                .background(TranslationAssetDownloadHost())
         }
         .commands {
             CommandGroup(replacing: .newItem) {}
@@ -24,6 +25,7 @@ struct AirTranslateApp: App {
 
         Settings {
             SettingsView(session: session)
+                .background(TranslationAssetDownloadHost())
         }
     }
 }
